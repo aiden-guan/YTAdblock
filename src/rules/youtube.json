@@ -5,7 +5,7 @@
     "action": { "type": "block" },
     "condition": {
       "urlFilter": "||googleads.g.doubleclick.net/pagead/",
-      "resourceTypes": ["xmlhttprequest", "sub_frame", "script", "image"]
+      "resourceTypes": ["sub_frame", "image"]
     }
   },
   {
@@ -14,7 +14,7 @@
     "action": { "type": "block" },
     "condition": {
       "urlFilter": "||pagead2.googlesyndication.com/pagead/",
-      "resourceTypes": ["xmlhttprequest", "sub_frame", "script", "image"]
+      "resourceTypes": ["sub_frame", "image"]
     }
   },
   {
@@ -23,25 +23,7 @@
     "action": { "type": "block" },
     "condition": {
       "urlFilter": "||ad.doubleclick.net/",
-      "resourceTypes": ["xmlhttprequest", "sub_frame", "script", "image"]
-    }
-  },
-  {
-    "id": 4,
-    "priority": 1,
-    "action": { "type": "block" },
-    "condition": {
-      "urlFilter": "||youtube.com/pagead/",
-      "resourceTypes": ["xmlhttprequest", "sub_frame", "script", "image"]
-    }
-  },
-  {
-    "id": 5,
-    "priority": 1,
-    "action": { "type": "block" },
-    "condition": {
-      "urlFilter": "||youtube.com/api/stats/ads",
-      "resourceTypes": ["xmlhttprequest", "ping"]
+      "resourceTypes": ["sub_frame", "image"]
     }
   }
 ]
