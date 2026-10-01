@@ -4,7 +4,9 @@
  * Ensures candidate responses are strictly valid, playable, clean of preroll ads,
  * and match the expected content video before any substitution occurs.
  *
- * Fail-safe principle: NEVER substitute an invalid or unplayable response.
+ * Current YouTube increasingly uses server-driven ABR (SABR), so a valid
+ * serverAbrStreamingUrl is an acceptable playback transport even when classic
+ * formats/adaptiveFormats are sparse or absent.
  */
 
 import { detectPrerollInfo } from "../preroll-detector";
@@ -18,62 +20,55 @@ export function validateAlternatePlayerResponse(
   }
 
   const root = response as Record<string, unknown>;
-  const candidate = (
+  const candidate =
     root.playerResponse &&
     typeof root.playerResponse === "object" &&
     !Array.isArray(root.playerResponse)
       ? (root.playerResponse as Record<string, unknown>)
-      : root
-  );
+      : root;
 
-  // 1. videoDetails and expectedVideoId match
   const videoDetails = candidate.videoDetails as Record<string, unknown> | undefined;
-  if (!videoDetails || typeof videoDetails !== "object") {
-    return false;
-  }
-  if (videoDetails.videoId !== expectedVideoId) {
-    return false;
-  }
+  if (!videoDetails || typeof videoDetails !== "object") return false;
+  if (videoDetails.videoId !== expectedVideoId) return false;
 
-  // 2. Playability status must be "OK"
-  const playabilityStatus = candidate.playabilityStatus as Record<string, unknown> | undefined;
-  if (!playabilityStatus || typeof playabilityStatus !== "object") {
-    return false;
-  }
-  const status = playabilityStatus.status;
-  if (status !== "OK") {
-    return false; // Rejects LOGIN_REQUIRED, AGE_CHECK_REQUIRED, UNPLAYABLE, ERROR, etc.
-  }
+  const playabilityStatus = candidate.playabilityStatus as
+    | Record<string, unknown>
+    | undefined;
+  if (!playabilityStatus || playabilityStatus.status !== "OK") return false;
 
-  // 3. Streaming data must be present with valid playback formats
   const streamingData = candidate.streamingData as Record<string, unknown> | undefined;
-  if (!streamingData || typeof streamingData !== "object") {
-    return false;
-  }
+  if (!streamingData || typeof streamingData !== "object") return false;
 
   const hasStandardFormats =
     Array.isArray(streamingData.formats) && streamingData.formats.length > 0;
   const hasAdaptiveFormats =
-    Array.isArray(streamingData.adaptiveFormats) && streamingData.adaptiveFormats.length > 0;
+    Array.isArray(streamingData.adaptiveFormats) &&
+    streamingData.adaptiveFormats.length > 0;
   const hasHlsManifest =
-    typeof streamingData.hlsManifestUrl === "string" && streamingData.hlsManifestUrl.length > 0;
+    typeof streamingData.hlsManifestUrl === "string" &&
+    streamingData.hlsManifestUrl.length > 0;
+  const hasDashManifest =
+    typeof streamingData.dashManifestUrl === "string" &&
+    streamingData.dashManifestUrl.length > 0;
+  const hasServerAbr =
+    typeof streamingData.serverAbrStreamingUrl === "string" &&
+    streamingData.serverAbrStreamingUrl.length > 0;
 
-  if (!hasStandardFormats && !hasAdaptiveFormats && !hasHlsManifest) {
+  if (
+    !hasStandardFormats &&
+    !hasAdaptiveFormats &&
+    !hasHlsManifest &&
+    !hasDashManifest &&
+    !hasServerAbr
+  ) {
     return false;
   }
 
-  // 4. Must NOT contain obvious preroll ad structures
-  const prerollInfo = detectPrerollInfo(candidate);
-  if (prerollInfo.hasPreroll) {
-    return false;
-  }
+  if (detectPrerollInfo(candidate).hasPreroll) return false;
 
-  // 5. Video duration must be consistent / positive
   if (videoDetails.lengthSeconds !== undefined) {
     const length = Number(videoDetails.lengthSeconds);
-    if (!Number.isFinite(length) || length < 0) {
-      return false;
-    }
+    if (!Number.isFinite(length) || length < 0) return false;
   }
 
   return true;
