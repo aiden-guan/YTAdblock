@@ -39,13 +39,33 @@ html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-text-overlay {
 }
 
 /*
- * When the fallback intentionally allows a real preroll to initialize, hide the
- * ad frames while the controller immediately seeks/skips them. The attribute is
- * present only during a confirmed YouTube ad state and is removed on recovery.
+ * During a confirmed player ad, blank the ad creative/end-card surfaces while
+ * the state machine fast-completes the ad. Keep the player's ordinary controls
+ * alive so recovery remains under YouTube's normal playback lifecycle.
  */
 html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] video.html5-main-video,
-html:not([ytclean-cosmetic-disabled="true"]) .html5-video-player[ytclean-ad-active="true"] video {
+html:not([ytclean-cosmetic-disabled="true"]) .html5-video-player[ytclean-ad-active="true"] video,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-player-overlay,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-player-overlay-flyout-cta,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-image-overlay,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-text,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-visit-advertiser-link,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-visit-advertiser-link__text {
   opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Preserve the native skip control as an emergency manual escape hatch. */
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-skip-button,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-skip-button-modern,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-skip-ad-button,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-skip-ad-button-modern,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-skip-button-container,
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] .ytp-ad-skip-button-slot {
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
 }
 
 /* Shorts ad slots and sponsored reels */

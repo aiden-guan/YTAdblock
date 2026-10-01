@@ -12,10 +12,17 @@ export class PlayerController {
   ) {}
 
   public getVideoElement(): HTMLVideoElement | null {
-    return this.playerElement.querySelector<HTMLVideoElement>("video");
+    return (
+      this.playerElement.querySelector<HTMLVideoElement>("video.html5-main-video") ||
+      this.playerElement.querySelector<HTMLVideoElement>("video")
+    );
   }
 
   public snapshotUserState(): void {
+    // Mark the ad state immediately even if the video node is replaced a moment
+    // later. This lets cosmetic CSS hide current ad/end-card surfaces at once.
+    this.playerElement.setAttribute("ytclean-ad-active", "true");
+
     if (this.savedUserState !== null) return;
 
     const video = this.getVideoElement();
@@ -31,10 +38,15 @@ export class PlayerController {
       volume: video.volume,
       playbackRate: rate
     };
-
-    this.playerElement.setAttribute("ytclean-ad-active", "true");
   }
 
+  /**
+   * Dispatches a click attempt only.
+   *
+   * Do not interpret a non-throwing .click() call as proof that YouTube accepted
+   * the skip. Current player code can ignore synthetic clicks. The state machine
+   * verifies ad state again and uses the media fallback if the ad remains active.
+   */
   public tryClickSkipButton(detection: AdDetectionResult): boolean {
     const btn = detection.skipButtonElement;
     if (!btn) return false;
@@ -68,7 +80,11 @@ export class PlayerController {
       this.onEvent?.({ type: "AD_ACCELERATED" });
     } catch {
       try {
+        video.muted = true;
         video.playbackRate = 8;
+        if (video.paused) {
+          void video.play().catch(() => {});
+        }
         this.onEvent?.({ type: "AD_ACCELERATED" });
       } catch {
         // Ignore playback-rate failure.
@@ -77,12 +93,22 @@ export class PlayerController {
   }
 
   public trySeekToEndOfAd(detection: AdDetectionResult): boolean {
-    if (!detection.isConfirmedAd || !detection.hasAdShowingClass) {
+    if (!detection.isConfirmedAd) {
       return false;
     }
 
     const video = this.getVideoElement();
     if (!video) return false;
+
+    // Explicit ad-showing is sufficient. Without it, require a high-confidence
+    // modern ad UI and cap duration so an accidental content false-positive
+    // cannot fast-forward a long normal video.
+    if (
+      !detection.hasAdShowingClass &&
+      (detection.score < 7 || !Number.isFinite(video.duration) || video.duration > 180)
+    ) {
+      return false;
+    }
 
     if (
       Number.isFinite(video.duration) &&
@@ -91,8 +117,12 @@ export class PlayerController {
     ) {
       try {
         video.muted = true;
-        const target = Math.max(0, video.duration - 0.01);
-        video.currentTime = target;
+        video.playbackRate = 16;
+
+        // Set to the exact end. YouTube may clamp this internally, but doing so
+        // produces a proper media end transition more reliably than stopping one
+        // frame short on end-card ads.
+        video.currentTime = video.duration;
 
         if (video.paused) {
           void video.play().catch(() => {});
