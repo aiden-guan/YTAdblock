@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { installXhrInterceptor } from "../src/main/xhr-interceptor";
 import adFixture from "./fixtures/player-with-ads.json";
-import cleanFixture from "./fixtures/player-clean.json";
 import type { BlockerEvent } from "../src/types/events";
 
 describe("xhr-interceptor", () => {
@@ -11,7 +10,6 @@ describe("xhr-interceptor", () => {
   beforeEach(() => {
     emittedEvents = [];
 
-    // Mock XMLHttpRequest prototype
     class MockXHR {
       public readyState = 0;
       public status = 200;
@@ -21,13 +19,9 @@ describe("xhr-interceptor", () => {
       public onreadystatechange: (() => void) | null = null;
       public onload: (() => void) | null = null;
 
-      public open(method: string, url: string) {
-        // Will be wrapped
-      }
-
-      public send(body?: any) {
-        // Will be wrapped
-      }
+      public open(_method: string, _url: string) {}
+      public send(_body?: any) {}
+      public addEventListener(_name: string, _handler: EventListenerOrEventListenerObject, _opts?: any) {}
     }
 
     Object.defineProperty(MockXHR.prototype, "responseText", {
@@ -44,9 +38,7 @@ describe("xhr-interceptor", () => {
       }
     });
 
-    fakeWindow = {
-      XMLHttpRequest: MockXHR
-    };
+    fakeWindow = { XMLHttpRequest: MockXHR };
   });
 
   afterEach(() => {
@@ -68,59 +60,41 @@ describe("xhr-interceptor", () => {
     teardown();
   });
 
-  it("sanitizes player response when onreadystatechange was assigned before send", () => {
+  it("preserves preroll player response instead of stripping it without a replacement stream", () => {
     const teardown = installXhrInterceptor(fakeWindow, (ev) => emittedEvents.push(ev));
 
     const xhr = new fakeWindow.XMLHttpRequest();
     xhr.open("POST", "https://www.youtube.com/youtubei/v1/player");
-
-    let receivedText = "";
-    xhr.onreadystatechange = () => {
-      if (xhr.readyState === 4) {
-        receivedText = xhr.responseText;
-      }
-    };
-
     xhr._rawResponseText = JSON.stringify(adFixture);
+    xhr._rawResponse = JSON.stringify(adFixture);
     xhr.readyState = 4;
     xhr.status = 200;
     xhr.send();
 
-    // Trigger onreadystatechange handler as standard browser XHR would
-    xhr.onreadystatechange();
-
-    expect(receivedText).not.toBe("");
-    const parsed = JSON.parse(receivedText);
-    expect(parsed.adPlacements).toBeUndefined();
-    expect(parsed.playerAds).toBeUndefined();
+    const parsed = JSON.parse(xhr.responseText);
+    expect(parsed.adPlacements).toBeDefined();
+    expect(parsed.playerAds).toBeDefined();
     expect(parsed.videoDetails).toBeDefined();
-
-    expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" },
-      {
-        type: "PLAYER_RESPONSE_SANITIZED",
-        removed: expect.arrayContaining(["adPlacements", "playerAds"])
-      }
-    ]);
+    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
 
     teardown();
   });
 
-  it("returns parsed JSON object when responseType is json", () => {
+  it("preserves preroll JSON responseType objects", () => {
     const teardown = installXhrInterceptor(fakeWindow, (ev) => emittedEvents.push(ev));
 
     const xhr = new fakeWindow.XMLHttpRequest();
     xhr.open("POST", "/youtubei/v1/player");
     xhr.responseType = "json";
     xhr._rawResponseText = JSON.stringify(adFixture);
+    xhr._rawResponse = JSON.parse(JSON.stringify(adFixture));
     xhr.readyState = 4;
     xhr.status = 200;
     xhr.send();
 
     const result = xhr.response;
     expect(result).toBeDefined();
-    expect(typeof result).toBe("object");
-    expect(result.adPlacements).toBeUndefined();
+    expect(result.adPlacements).toBeDefined();
     expect(result.streamingData).toBeDefined();
 
     teardown();
