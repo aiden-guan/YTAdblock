@@ -6,6 +6,7 @@ export interface PlayerClientProfile {
   enabled: boolean;
   clientScreen?: string;
   requiresEmbedContext?: boolean;
+  useAdPlaybackContext?: boolean;
   osName?: string;
   osVersion?: string;
   androidSdkVersion?: number;
@@ -26,6 +27,14 @@ export interface StrategyStats {
  * reproduce. Current versions below track yt-dlp's maintained 2026 client set.
  */
 export const INITIAL_CLIENT_PROFILES: PlayerClientProfile[] = [
+  {
+    id: "mweb-ad-context",
+    clientName: "MWEB",
+    clientVersion: "2.20260708.05.00",
+    innertubeContextClientName: 2,
+    useAdPlaybackContext: true,
+    enabled: true
+  },
   {
     id: "web-embedded",
     clientName: "WEB_EMBEDDED_PLAYER",
