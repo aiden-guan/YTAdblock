@@ -28,14 +28,30 @@ export function installInitialPlayerResponseHook(
     if (value === null || typeof value !== "object") return value;
 
     const videoId = (value as any)?.videoDetails?.videoId;
+    const prerollInfo = detectPrerollInfo(value);
+
     if (videoId) {
       globalPlaybackTiming.startSession(videoId);
       globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RECEIVED", videoId);
-      globalPlaybackTiming.setPrerollInfo(detectPrerollInfo(value), videoId);
+      globalPlaybackTiming.setPrerollInfo(prerollInfo, videoId);
       globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
     }
 
     onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
+
+    if (prerollInfo.hasPreroll) {
+      onEvent?.({
+        type: "PREROLL_DETECTED",
+        videoId,
+        source: "initial"
+      });
+    } else {
+      onEvent?.({
+        type: "PREROLL_CLEARED",
+        videoId,
+        reason: "clean_response"
+      });
+    }
     return value;
   };
 

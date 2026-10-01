@@ -226,6 +226,16 @@ export async function handleFetchResponse(
     const prerollInfo = detectPrerollInfo(data);
     if (videoId) globalPlaybackTiming.setPrerollInfo(prerollInfo, videoId);
 
+    if (prerollInfo.hasPreroll) {
+      onEvent?.({ type: "PREROLL_DETECTED", videoId, source: "fetch" });
+    } else {
+      onEvent?.({
+        type: "PREROLL_CLEARED",
+        videoId,
+        reason: "clean_response"
+      });
+    }
+
     const { report } = sanitizePlayerResponse(data);
 
     if (!report.changed) {
@@ -256,6 +266,12 @@ export async function handleFetchResponse(
           type: "PLAYER_RESPONSE_SUBSTITUTED",
           candidateId: alternateResult.candidateId,
           videoId
+        });
+
+        onEvent?.({
+          type: "PREROLL_CLEARED",
+          videoId,
+          reason: "substituted"
         });
 
         onEvent?.({

@@ -86,10 +86,26 @@ export function installXhrInterceptor(
               "PLAYER_RESPONSE_RECEIVED",
               resolvedVideoId
             );
+            const prerollInfo = detectPrerollInfo(parsed);
             globalPlaybackTiming.setPrerollInfo(
-              detectPrerollInfo(parsed),
+              prerollInfo,
               resolvedVideoId
             );
+
+            if (prerollInfo.hasPreroll) {
+              onEvent?.({
+                type: "PREROLL_DETECTED",
+                videoId: resolvedVideoId,
+                source: "xhr"
+              });
+            } else {
+              onEvent?.({
+                type: "PREROLL_CLEARED",
+                videoId: resolvedVideoId,
+                reason: "clean_response"
+              });
+            }
+
             globalPlaybackTiming.recordMilestone(
               "PLAYER_RESPONSE_RETURNED_TO_YOUTUBE",
               resolvedVideoId

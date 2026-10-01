@@ -5,6 +5,45 @@
  * Supports runtime toggle via html[ytclean-cosmetic-disabled="true"].
  */
 
+
+/*
+ * Pre-render preroll shield.
+ *
+ * MAIN-world interception can know that a preroll exists before YouTube has
+ * painted the ad DOM. The isolated bridge sets this attribute immediately from
+ * that response event. Cover the entire player rather than chasing individual
+ * creative selectors, then remove the shield only when clean content is ready.
+ *
+ * This is core playback protection, so it intentionally remains active even if
+ * ordinary cosmetic filtering is disabled.
+ */
+html[ytclean-preroll-pending="true"] #movie_player {
+  position: relative !important;
+  background: #000 !important;
+}
+
+html[ytclean-preroll-pending="true"] #movie_player::after {
+  content: "" !important;
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 2147483646 !important;
+  display: block !important;
+  background: #000 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+/* Defense-in-depth if a player stacking context renders above the pseudo layer. */
+html[ytclean-preroll-pending="true"] #movie_player video.html5-main-video,
+html[ytclean-preroll-pending="true"] #movie_player .ytp-ad-player-overlay,
+html[ytclean-preroll-pending="true"] #movie_player .ytp-ad-player-overlay-flyout-cta,
+html[ytclean-preroll-pending="true"] #movie_player .video-ads,
+html[ytclean-preroll-pending="true"] #movie_player .ytp-ad-module {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
 /* Verified standalone ad slot renderers */
 html:not([ytclean-cosmetic-disabled="true"]) ytd-ad-slot-renderer,
 html:not([ytclean-cosmetic-disabled="true"]) ytd-display-ad-renderer,

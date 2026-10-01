@@ -87,7 +87,12 @@ describe("fetch-interceptor", () => {
     expect(json.videoDetails).toBeDefined();
 
     expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" }
+      { type: "PLAYER_RESPONSE_SEEN" },
+      {
+        type: "PREROLL_DETECTED",
+        videoId: adData.videoDetails.videoId,
+        source: "fetch"
+      }
     ]);
 
     teardown();
@@ -108,7 +113,14 @@ describe("fetch-interceptor", () => {
 
     expect(json).toEqual(cleanFixture);
     expect(res).toBe(originalResponse); // Untouched because no ad fields changed
-    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
+    expect(emittedEvents).toEqual([
+      { type: "PLAYER_RESPONSE_SEEN" },
+      {
+        type: "PREROLL_CLEARED",
+        videoId: cleanFixture.videoDetails.videoId,
+        reason: "clean_response"
+      }
+    ]);
 
     teardown();
   });
