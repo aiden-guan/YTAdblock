@@ -132,6 +132,10 @@ export class PlaybackStateMachine {
     this.clearPostClickVerification();
     this.transitionTo("RECOVERING");
     this.controller.restoreUserState();
+    this.onEvent?.({
+      type: "PREROLL_CLEARED",
+      reason: "content_resumed"
+    });
     this.transitionTo("CONTENT");
   }
 
@@ -199,6 +203,11 @@ export class PlaybackStateMachine {
       this.controller.restoreUserState();
     }
 
+    this.onEvent?.({
+      type: "PREROLL_CLEARED",
+      reason: "navigation"
+    });
+
     this.state = "CONTENT";
   }
 
@@ -208,6 +217,11 @@ export class PlaybackStateMachine {
     if (this.state === "CONFIRMED_AD" || this.state === "RECOVERING") {
       this.controller.restoreUserState();
     }
+
+    this.onEvent?.({
+      type: "PREROLL_CLEARED",
+      reason: "navigation"
+    });
 
     this.state = "CONTENT";
   }
