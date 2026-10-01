@@ -106,13 +106,37 @@ describe("PrerollShieldController", () => {
     expect(shield.isActive()).toBe(true);
   });
 
-  it("fails open after the watchdog", () => {
+  it("soft watchdog does not expose a confirmed preroll", () => {
     const shield = new PrerollShieldController(document);
     shield.handleEvent({
       type: "PREROLL_DETECTED",
       videoId: "video-a",
       source: "fetch"
     });
+
+    vi.advanceTimersByTime(12_000);
+
+    expect(shield.isActive()).toBe(true);
+    expect(document.documentElement.getAttribute("ytclean-preroll-pending")).toBe("true");
+  });
+
+  it("still has a hard fail-open cap for a completely broken lifecycle", () => {
+    const shield = new PrerollShieldController(document);
+    shield.handleEvent({
+      type: "PREROLL_DETECTED",
+      videoId: "video-a",
+      source: "fetch"
+    });
+
+    vi.advanceTimersByTime(45_000);
+
+    expect(shield.isActive()).toBe(false);
+    expect(document.documentElement.hasAttribute("ytclean-preroll-pending")).toBe(false);
+  });
+
+  it("soft watchdog can clear an unconfirmed pre-armed clean navigation", () => {
+    const shield = new PrerollShieldController(document);
+    shield.preArmNavigation();
 
     vi.advanceTimersByTime(12_000);
 
