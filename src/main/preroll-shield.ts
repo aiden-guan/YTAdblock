@@ -1,6 +1,7 @@
 import type { BlockerEvent } from "../types/events";
 
 const SHIELD_ATTRIBUTE = "ytclean-preroll-pending";
+const POSTER_PROPERTY = "--ytclean-preroll-poster";
 const SOFT_WATCHDOG_MS = 12_000;
 const HARD_WATCHDOG_MS = 45_000;
 
@@ -44,10 +45,13 @@ export class PrerollShieldController {
    * Pre-arm a navigation before we know whether the destination has an ad.
    * This is intentionally revealable by confirmed content playback.
    */
-  public preArmNavigation(): void {
+  public preArmNavigation(videoId?: string): void {
     this.active = true;
-    this.activeVideoId = undefined;
+    this.activeVideoId = videoId;
     this.confirmedPreroll = false;
+    if (videoId) {
+      this.applyPoster(videoId);
+    }
     this.applyAttribute(true);
     this.restartWatchdogs();
   }
@@ -61,6 +65,7 @@ export class PrerollShieldController {
     this.active = true;
     if (videoId) {
       this.activeVideoId = videoId;
+      this.applyPoster(videoId);
     }
     this.confirmedPreroll = true;
     this.applyAttribute(true);
@@ -93,6 +98,7 @@ export class PrerollShieldController {
     this.confirmedPreroll = false;
     this.stopWatchdogs();
     this.applyAttribute(false);
+    this.clearPoster();
   }
 
   public handleEvent(event: BlockerEvent): void {
@@ -145,6 +151,40 @@ export class PrerollShieldController {
 
   public hasConfirmedPreroll(): boolean {
     return this.confirmedPreroll;
+  }
+
+  private applyPoster(videoId: string): void {
+    const root = this.targetDocument.documentElement;
+    if (!root || !videoId) return;
+
+    const safeVideoId = encodeURIComponent(videoId);
+    // hqdefault exists broadly and is available immediately. Upgrade to maxres
+    // opportunistically if the video has one.
+    const hq = `https://i.ytimg.com/vi/${safeVideoId}/hqdefault.jpg`;
+    root.style.setProperty(POSTER_PROPERTY, `url("${hq}")`);
+
+    try {
+      const image = new Image();
+      image.onload = () => {
+        if (
+          this.active &&
+          this.activeVideoId === videoId &&
+          image.naturalWidth > 640
+        ) {
+          const maxres =
+            `https://i.ytimg.com/vi/${safeVideoId}/maxresdefault.jpg`;
+          root.style.setProperty(POSTER_PROPERTY, `url("${maxres}")`);
+        }
+      };
+      image.src =
+        `https://i.ytimg.com/vi/${safeVideoId}/maxresdefault.jpg`;
+    } catch {
+      // hqdefault remains the fallback.
+    }
+  }
+
+  private clearPoster(): void {
+    this.targetDocument.documentElement?.style.removeProperty(POSTER_PROPERTY);
   }
 
   private applyAttribute(active: boolean): void {

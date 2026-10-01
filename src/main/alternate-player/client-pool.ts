@@ -7,9 +7,11 @@ export interface PlayerClientProfile {
   clientScreen?: string;
   requiresEmbedContext?: boolean;
   useAdPlaybackContext?: boolean;
+  contextUserAgent?: string;
   osName?: string;
   osVersion?: string;
   androidSdkVersion?: number;
+  deviceMake?: string;
   deviceModel?: string;
 }
 
@@ -22,17 +24,26 @@ export interface StrategyStats {
 }
 
 /**
- * Keep this pool deliberately browser-compatible. Native ANDROID/IOS profiles
- * require User-Agent / PO-token behavior that a page fetch cannot faithfully
- * reproduce. Current versions below track yt-dlp's maintained 2026 client set.
+ * Browser-usable clean-player candidates.
+ *
+ * Ordering is deliberate and follows the practical 2026 YouTube client state
+ * tracked by maintained yt-dlp:
+ *
+ * - tv_downgraded: cookie-capable, no declared GVS PO-token requirement, and
+ *   explicitly used by yt-dlp as an authenticated/free-account fallback.
+ * - web_embedded: cookie-capable and no declared GVS PO-token requirement.
+ * - tv: cookie-capable and no declared GVS PO-token requirement.
+ * - visionos: useful JS-less/public fallback, but not cookie-capable.
+ * - mweb: kept only as a late fallback because current HTTPS/DASH playback is
+ *   declared PO-token-required; spending an early race slot on it is wasteful.
  */
 export const INITIAL_CLIENT_PROFILES: PlayerClientProfile[] = [
   {
-    id: "mweb-ad-context",
-    clientName: "MWEB",
-    clientVersion: "2.20260708.05.00",
-    innertubeContextClientName: 2,
-    useAdPlaybackContext: true,
+    id: "tv-downgraded",
+    clientName: "TVHTML5",
+    clientVersion: "5.20260707",
+    innertubeContextClientName: 7,
+    contextUserAgent: "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
     enabled: true
   },
   {
@@ -40,6 +51,8 @@ export const INITIAL_CLIENT_PROFILES: PlayerClientProfile[] = [
     clientName: "WEB_EMBEDDED_PLAYER",
     clientVersion: "2.20260708.00.00",
     innertubeContextClientName: 56,
+    contextUserAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.5 Safari/605.1.15,gzip(gfe)",
     requiresEmbedContext: true,
     enabled: true
   },
@@ -48,7 +61,31 @@ export const INITIAL_CLIENT_PROFILES: PlayerClientProfile[] = [
     clientName: "TVHTML5",
     clientVersion: "7.20260707.07.00",
     innertubeContextClientName: 7,
-    clientScreen: "WATCH",
+    contextUserAgent:
+      "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)",
+    enabled: true
+  },
+  {
+    id: "visionos",
+    clientName: "VISIONOS",
+    clientVersion: "1.02",
+    innertubeContextClientName: 101,
+    contextUserAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+    osName: "visionOS",
+    osVersion: "26.5.23O471",
+    deviceMake: "Apple",
+    deviceModel: "RealityDevice17,1",
+    enabled: true
+  },
+  {
+    id: "mweb-ad-context",
+    clientName: "MWEB",
+    clientVersion: "2.20260708.05.00",
+    innertubeContextClientName: 2,
+    contextUserAgent:
+      "Mozilla/5.0 (iPad; CPU OS 16_7_10 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1,gzip(gfe)",
+    useAdPlaybackContext: true,
     enabled: true
   }
 ];
@@ -87,6 +124,9 @@ export class PlayerClientPool {
       const statB = this.stats.get(b.id)!;
       const scoreA = statA.successes * 2 - statA.failures - statA.media403s * 3;
       const scoreB = statB.successes * 2 - statB.failures - statB.media403s * 3;
+
+      // Array#sort is stable in modern Chromium/Node, so equal scores retain the
+      // deliberate base ordering above.
       return scoreB - scoreA;
     });
   }

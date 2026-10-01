@@ -52,7 +52,8 @@ import {
   // the first player paint. Arm immediately so neither an ad nor its end card
   // can flash before the player response is classified.
   if (window.location.pathname === "/watch") {
-    globalPrerollShield.preArmNavigation();
+    const videoId = new URL(window.location.href).searchParams.get("v") ?? undefined;
+    globalPrerollShield.preArmNavigation(videoId);
   }
 
   const source = new MainWorldPlayerResponseSource(window, (event) => {

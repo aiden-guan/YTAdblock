@@ -94,11 +94,13 @@ export class AlternatePlayerManager {
     }
 
     if (candidate.clientScreen) nextClient.clientScreen = candidate.clientScreen;
+    if (candidate.contextUserAgent) nextClient.userAgent = candidate.contextUserAgent;
     if (candidate.osName) nextClient.osName = candidate.osName;
     if (candidate.osVersion) nextClient.osVersion = candidate.osVersion;
     if (candidate.androidSdkVersion) {
       nextClient.androidSdkVersion = candidate.androidSdkVersion;
     }
+    if (candidate.deviceMake) nextClient.deviceMake = candidate.deviceMake;
     if (candidate.deviceModel) nextClient.deviceModel = candidate.deviceModel;
 
     context.client = nextClient;
@@ -191,7 +193,13 @@ export class AlternatePlayerManager {
         requestContextOrBudget ?? { url: "/youtubei/v1/player?prettyPrint=false" };
     }
 
-    const candidates = this.clientPool.getCandidates().slice(0, 2);
+    // Race the strongest browser-usable clients. The old implementation only
+    // raced two candidates, which meant TVHTML5 was never attempted on a fresh
+    // session because MWEB + WEB_EMBEDDED occupied both slots. Current MWEB
+    // HTTPS/DASH playback is PO-token-gated, so that ordering wasted half of the
+    // race. Four candidates keeps latency bounded while including the practical
+    // TV/embedded/JS-less fallbacks.
+    const candidates = this.clientPool.getCandidates().slice(0, 4);
     if (candidates.length === 0) return null;
 
     const raceController = new AbortController();
