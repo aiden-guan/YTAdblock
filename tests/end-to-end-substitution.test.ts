@@ -15,6 +15,18 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
   let fakeWindow: any;
   let emittedEvents: BlockerEvent[];
 
+  const addProbeableMedia = (data: any, suffix: string) => {
+    const copy = JSON.parse(JSON.stringify(data));
+    copy.streamingData ??= {};
+    copy.streamingData.formats ??= [];
+    if (copy.streamingData.formats.length === 0) {
+      copy.streamingData.formats.push({ itag: 18, mimeType: "video/mp4" });
+    }
+    copy.streamingData.formats[0].url =
+      `https://r1---sn-test.googlevideo.com/videoplayback?id=${suffix}`;
+    return copy;
+  };
+
   beforeEach(() => {
     emittedEvents = [];
     fakeWindow = {
@@ -31,13 +43,16 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     const targetVideoId = "abc123xyz89";
     originalAdResponse.videoDetails.videoId = targetVideoId;
 
-    const cleanCandidateData = JSON.parse(JSON.stringify(cleanFixture));
+    const cleanCandidateData = addProbeableMedia(cleanFixture, targetVideoId);
     cleanCandidateData.videoDetails.videoId = targetVideoId;
     cleanCandidateData.streamingData.formats[0].itag = 777; // Distinct clean stream marker
 
-    const fakeInternalFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(cleanCandidateData), { status: 200 })
-    );
+    const fakeInternalFetch = vi.fn().mockImplementation(async (url: string) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 206 });
+      }
+      return new Response(JSON.stringify(cleanCandidateData), { status: 200 });
+    });
 
     const clientPool = new PlayerClientPool();
     const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
@@ -286,10 +301,14 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     const pool = new PlayerClientPool();
     let abortedCandidate: string | null = null;
 
-    const cleanData = JSON.parse(JSON.stringify(cleanFixture));
+    const cleanData = addProbeableMedia(cleanFixture, "vid-race-9");
     cleanData.videoDetails.videoId = "vid-race-9";
 
     const fakeInternalFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 206 });
+      }
+
       const body = JSON.parse(init.body as string);
       const clientName = body.context?.client?.clientName;
 
