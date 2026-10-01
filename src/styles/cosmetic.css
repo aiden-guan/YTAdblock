@@ -30,7 +30,11 @@ html[ytclean-preroll-pending="true"] #movie_player::after {
   inset: 0 !important;
   z-index: 2147483646 !important;
   display: block !important;
-  background: #000 !important;
+  background-color: #000 !important;
+  background-image: var(--ytclean-preroll-poster, none) !important;
+  background-position: center !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
   opacity: 1 !important;
   visibility: visible !important;
   pointer-events: auto !important;
