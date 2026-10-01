@@ -7,6 +7,20 @@ import cleanFixture from "./fixtures/player-clean.json";
 import adFixture from "./fixtures/player-with-ads.json";
 
 describe("PlayerClientPool", () => {
+  it("starts with browser-usable PO-token-light candidates", () => {
+    const pool = new PlayerClientPool();
+    const candidates = pool.getCandidates();
+
+    expect(candidates.slice(0, 4).map((c) => c.id)).toEqual([
+      "tv-downgraded",
+      "web-embedded",
+      "tvhtml5",
+      "visionos"
+    ]);
+
+    expect(candidates.findIndex((c) => c.id === "mweb-ad-context")).toBeGreaterThanOrEqual(4);
+  });
+
   it("prioritizes preferredCleanClient on subsequent requests", () => {
     const pool = new PlayerClientPool();
     const initialCandidates = pool.getCandidates();
@@ -119,6 +133,36 @@ describe("AlternatePlayerManager race and lifecycle", () => {
 
   beforeEach(() => {
     fakeFetch = vi.fn();
+  });
+
+  it("builds client-specific payload identity including context user agent", () => {
+    const pool = new PlayerClientPool();
+    const manager = new AlternatePlayerManager(pool, fakeFetch);
+    const candidate = pool.getProfile("tv-downgraded");
+
+    expect(candidate).toBeDefined();
+
+    const payload = manager.buildCandidatePayload(
+      {
+        videoId: "ctx-video",
+        context: {
+          client: {
+            clientName: "WEB",
+            clientVersion: "2.0",
+            visitorData: "visitor-1"
+          }
+        }
+      },
+      candidate!,
+      "ctx-video"
+    ) as any;
+
+    expect(payload.context.client.clientName).toBe("TVHTML5");
+    expect(payload.context.client.clientVersion).toBe("5.20260707");
+    expect(payload.context.client.userAgent).toBe(
+      "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version"
+    );
+    expect(payload.context.client.visitorData).toBe("visitor-1");
   });
 
   it("executes bounded race and selects first valid clean candidate while aborting others", async () => {
