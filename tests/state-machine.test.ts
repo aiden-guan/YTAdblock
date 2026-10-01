@@ -121,8 +121,81 @@ describe("PlaybackStateMachine", () => {
     expect(sm.getState()).toBe("CONFIRMED_AD");
     expect(videoEl.muted).toBe(true);
     expect(videoEl.playbackRate).toBe(16);
-    // Sought to video.duration - 0.01 => 60 - 0.01 = 59.99
-    expect(videoEl.currentTime).toBeCloseTo(59.99, 2);
+    // Confirmed ads are driven to the exact media end.
+    expect(videoEl.currentTime).toBeCloseTo(60, 2);
+  });
+
+  it("falls back to media completion when a synthetic skip click is ignored", () => {
+    const sm = new PlaybackStateMachine(
+      playerEl,
+      (ev) => emittedEvents.push(ev),
+      (from, to) => stateTransitions.push({ from, to })
+    );
+
+    playerEl.classList.add("ad-showing");
+
+    const skipBtn = document.createElement("button");
+    skipBtn.className = "ytp-ad-skip-button-modern";
+    Object.defineProperty(skipBtn, "offsetWidth", { value: 80 });
+    Object.defineProperty(skipBtn, "offsetHeight", { value: 30 });
+
+    // The DOM click fires, but the player remains in ad-showing — matching
+    // YouTube rejecting/ignoring a synthetic skip action.
+    const clickSpy = vi.fn();
+    skipBtn.onclick = clickSpy;
+    playerEl.appendChild(skipBtn);
+
+    sm.update();
+
+    expect(clickSpy).toHaveBeenCalledTimes(1);
+    expect(videoEl.currentTime).toBe(10);
+
+    vi.advanceTimersByTime(80);
+
+    expect(videoEl.currentTime).toBeCloseTo(60, 2);
+    expect(emittedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "SKIP_CLICKED" }),
+        expect.objectContaining({ type: "AD_SEEKED" })
+      ])
+    );
+  });
+
+  it("recognizes the modern end-card without relying on ad-showing class", () => {
+    const sm = new PlaybackStateMachine(
+      playerEl,
+      (ev) => emittedEvents.push(ev),
+      (from, to) => stateTransitions.push({ from, to })
+    );
+
+    const skipSlot = document.createElement("div");
+    skipSlot.className = "ytp-ad-skip-button-slot";
+    Object.defineProperty(skipSlot, "offsetWidth", { value: 100 });
+    Object.defineProperty(skipSlot, "offsetHeight", { value: 40 });
+
+    const skipBtn = document.createElement("button");
+    skipBtn.setAttribute("aria-label", "Skip ad");
+    Object.defineProperty(skipBtn, "offsetWidth", { value: 80 });
+    Object.defineProperty(skipBtn, "offsetHeight", { value: 30 });
+    skipSlot.appendChild(skipBtn);
+
+    const advertiser = document.createElement("div");
+    advertiser.className = "ytp-visit-advertiser-link";
+    Object.defineProperty(advertiser, "offsetWidth", { value: 120 });
+    Object.defineProperty(advertiser, "offsetHeight", { value: 30 });
+
+    playerEl.appendChild(skipSlot);
+    playerEl.appendChild(advertiser);
+
+    sm.update();
+
+    expect(sm.getState()).toBe("CONFIRMED_AD");
+    expect(playerEl.getAttribute("ytclean-ad-active")).toBe("true");
+    expect(emittedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "AD_CONFIRMED" })
+      ])
+    );
   });
 
   it("completely restores exact user volume, speed, and muted state on recovery", () => {
