@@ -131,6 +131,18 @@ describe("mergeCleanPlaybackData", () => {
 describe("AlternatePlayerManager race and lifecycle", () => {
   let fakeFetch: any;
 
+  const addProbeableMedia = (data: any, suffix: string) => {
+    const copy = JSON.parse(JSON.stringify(data));
+    copy.streamingData ??= {};
+    copy.streamingData.formats ??= [];
+    if (copy.streamingData.formats.length === 0) {
+      copy.streamingData.formats.push({ itag: 18, mimeType: "video/mp4" });
+    }
+    copy.streamingData.formats[0].url =
+      `https://r1---sn-test.googlevideo.com/videoplayback?id=${suffix}`;
+    return copy;
+  };
+
   beforeEach(() => {
     fakeFetch = vi.fn();
   });
@@ -167,10 +179,14 @@ describe("AlternatePlayerManager race and lifecycle", () => {
 
   it("executes bounded race and selects first valid clean candidate while aborting others", async () => {
     const pool = new PlayerClientPool();
-    const cleanData = JSON.parse(JSON.stringify(cleanFixture));
+    const cleanData = addProbeableMedia(cleanFixture, "race-video-123");
     cleanData.videoDetails.videoId = "race-video-123";
 
     fakeFetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 206 });
+      }
+
       const body = JSON.parse(init.body as string);
       const clientName = body.context?.client?.clientName;
 
@@ -192,6 +208,31 @@ describe("AlternatePlayerManager race and lifecycle", () => {
     expect(result).not.toBeNull();
     expect(result?.candidateId).toBe("web-embedded");
     expect(pool.getPreferredClient()).toBe("web-embedded");
+  });
+
+  it("rejects a structurally clean candidate when its media preflight returns 403", async () => {
+    const pool = new PlayerClientPool();
+    const cleanData = addProbeableMedia(cleanFixture, "probe-403");
+    cleanData.videoDetails.videoId = "probe-403";
+
+    fakeFetch.mockImplementation(async (url: string) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 403 });
+      }
+      return new Response(JSON.stringify(cleanData), { status: 200 });
+    });
+
+    const manager = new AlternatePlayerManager(pool, fakeFetch);
+    const result = await manager.fetchCleanAlternateResponse(
+      { videoId: "probe-403", context: {} },
+      "probe-403",
+      500
+    );
+
+    expect(result).toBeNull();
+    expect(
+      Object.values(pool.getAllStats()).some((stats) => stats.media403s > 0)
+    ).toBe(true);
   });
 
   it("falls back cleanly to null if all candidates fail or return invalid responses", async () => {
