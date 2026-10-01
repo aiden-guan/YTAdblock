@@ -24,6 +24,7 @@ export type ShieldClearReason =
 export class PrerollShieldController {
   private active = false;
   private activeVideoId: string | undefined;
+  private confirmedPreroll = false;
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private rootObserver: MutationObserver | null = null;
 
@@ -37,12 +38,29 @@ export class PrerollShieldController {
     return this.activeVideoId;
   }
 
-  public arm(videoId?: string): void {
+  /**
+   * Pre-arm a navigation before we know whether the destination has an ad.
+   * This is intentionally revealable by confirmed content playback.
+   */
+  public preArmNavigation(): void {
+    this.active = true;
+    this.activeVideoId = undefined;
+    this.confirmedPreroll = false;
+    this.applyAttribute(true);
+    this.restartWatchdog();
+  }
+
+  /**
+   * Latch a known preroll. Once this happens, an HTMLVideoElement "playing"
+   * event is not sufficient to reveal the player because that event may belong
+   * to the ad itself.
+   */
+  public armDetectedPreroll(videoId?: string): void {
     this.active = true;
     if (videoId) {
       this.activeVideoId = videoId;
     }
-
+    this.confirmedPreroll = true;
     this.applyAttribute(true);
     this.restartWatchdog();
   }
@@ -70,13 +88,14 @@ export class PrerollShieldController {
 
     this.active = false;
     this.activeVideoId = undefined;
+    this.confirmedPreroll = false;
     this.stopWatchdog();
     this.applyAttribute(false);
   }
 
   public handleEvent(event: BlockerEvent): void {
     if (event.type === "PREROLL_DETECTED") {
-      this.arm(event.videoId);
+      this.armDetectedPreroll(event.videoId);
       return;
     }
 
@@ -116,7 +135,14 @@ export class PrerollShieldController {
    * secondary player response.
    */
   public clearForContentPlayback(): void {
+    if (this.confirmedPreroll) {
+      return;
+    }
     this.clear("content_playing");
+  }
+
+  public hasConfirmedPreroll(): boolean {
+    return this.confirmedPreroll;
   }
 
   private applyAttribute(active: boolean): void {
