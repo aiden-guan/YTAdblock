@@ -230,6 +230,13 @@ describe("PlaybackStateMachine", () => {
 
     sm.update();
 
+    // A single clean mutation is not enough; stay shielded through YouTube's
+    // linear-ad -> end-card transition gap.
+    expect(sm.getState()).toBe("RECOVERING");
+    expect(videoEl.muted).toBe(true);
+
+    vi.advanceTimersByTime(650);
+
     expect(sm.getState()).toBe("CONTENT");
     expect(videoEl.muted).toBe(false);
     expect(videoEl.volume).toBe(0.42);
@@ -260,8 +267,90 @@ describe("PlaybackStateMachine", () => {
     playerEl.removeChild(skipBtn);
 
     sm.update();
+    expect(sm.getState()).toBe("RECOVERING");
+
+    vi.advanceTimersByTime(650);
+
     expect(sm.getState()).toBe("CONTENT");
     expect(videoEl.muted).toBe(true); // Must remain muted
+  });
+
+
+  it("keeps the player shielded when an advertiser end card appears during the recovery gap", () => {
+    const sm = new PlaybackStateMachine(
+      playerEl,
+      (ev) => emittedEvents.push(ev),
+      (from, to) => stateTransitions.push({ from, to })
+    );
+
+    playerEl.classList.add("ad-showing");
+
+    const adText = document.createElement("div");
+    adText.className = "ytp-ad-text";
+    adText.textContent = "Ad";
+    Object.defineProperty(adText, "offsetWidth", { value: 50 });
+    Object.defineProperty(adText, "offsetHeight", { value: 20 });
+    playerEl.appendChild(adText);
+
+    sm.update();
+    expect(sm.getState()).toBe("CONFIRMED_AD");
+    expect(playerEl.getAttribute("ytclean-ad-active")).toBe("true");
+
+    // Linear ad disappears briefly.
+    playerEl.classList.remove("ad-showing");
+    playerEl.removeChild(adText);
+    sm.update();
+    expect(sm.getState()).toBe("RECOVERING");
+
+    // Before the clean-state window completes, YouTube creates the advertiser
+    // end card. This must be treated as the same ad and must not emit recovery.
+    vi.advanceTimersByTime(300);
+
+    const endCard = document.createElement("div");
+    endCard.className = "ytp-visit-advertiser-link";
+    Object.defineProperty(endCard, "offsetWidth", { value: 140 });
+    Object.defineProperty(endCard, "offsetHeight", { value: 40 });
+
+    const skip = document.createElement("button");
+    skip.className = "ytp-ad-skip-button-modern";
+    Object.defineProperty(skip, "offsetWidth", { value: 80 });
+    Object.defineProperty(skip, "offsetHeight", { value: 30 });
+
+    playerEl.appendChild(endCard);
+    playerEl.appendChild(skip);
+    sm.update();
+
+    expect(sm.getState()).toBe("CONFIRMED_AD");
+    expect(playerEl.getAttribute("ytclean-ad-active")).toBe("true");
+    expect(
+      emittedEvents.some(
+        (event) =>
+          event.type === "CONTENT_RESUMED" ||
+          (event.type === "PREROLL_CLEARED" &&
+            event.reason === "content_resumed")
+      )
+    ).toBe(false);
+
+    // End card disappears. Only after a full stable clean window may content
+    // be revealed and user playback state restored.
+    playerEl.removeChild(endCard);
+    playerEl.removeChild(skip);
+    sm.update();
+    expect(sm.getState()).toBe("RECOVERING");
+
+    vi.advanceTimersByTime(650);
+
+    expect(sm.getState()).toBe("CONTENT");
+    expect(playerEl.hasAttribute("ytclean-ad-active")).toBe(false);
+    expect(emittedEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "CONTENT_RESUMED" }),
+        expect.objectContaining({
+          type: "PREROLL_CLEARED",
+          reason: "content_resumed"
+        })
+      ])
+    );
   });
 
   it("handles SPA navigation by resetting state and clearing timers cleanly", () => {
