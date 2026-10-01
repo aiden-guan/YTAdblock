@@ -1,7 +1,12 @@
 import { SKIP_SELECTORS, AD_CONTAINER_SELECTORS } from "../config/youtube";
 
 export interface AdSignal {
-  name: "AD_SHOWING_CLASS" | "SKIP_BUTTON_VISIBLE" | "AD_CONTAINER_VISIBLE" | "AD_TEXT_PRESENT" | "AD_MODULE_CHILDREN";
+  name:
+    | "AD_SHOWING_CLASS"
+    | "SKIP_BUTTON_VISIBLE"
+    | "AD_CONTAINER_VISIBLE"
+    | "AD_TEXT_PRESENT"
+    | "AD_MODULE_CHILDREN";
   weight: number;
   detail: string;
 }
@@ -15,25 +20,29 @@ export interface AdDetectionResult {
   skipButtonElement: HTMLElement | null;
 }
 
-/**
- * Checks whether an element is visible in the DOM.
- */
 export function isElementVisible(el: HTMLElement | null): boolean {
   if (!el) return false;
   if (el.hidden) return false;
   const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
   if (style) {
-    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.opacity === "0"
+    ) {
       return false;
     }
   }
-  return el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0;
+  return (
+    el.offsetWidth > 0 ||
+    el.offsetHeight > 0 ||
+    el.getClientRects().length > 0
+  );
 }
 
-/**
- * Scans the player element for independent, verifiable ad signals.
- */
-export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionResult {
+export function detectAdSignals(
+  playerElement: HTMLElement | null
+): AdDetectionResult {
   const signals: AdSignal[] = [];
   let skipButton: HTMLElement | null = null;
 
@@ -48,7 +57,6 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
     };
   }
 
-  // Signal 1: Player class indicator
   const hasAdShowingClass =
     playerElement.classList.contains("ad-showing") ||
     playerElement.classList.contains("ad-interrupting");
@@ -56,12 +64,11 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
   if (hasAdShowingClass) {
     signals.push({
       name: "AD_SHOWING_CLASS",
-      weight: 2,
-      detail: "Player element contains ad-showing or ad-interrupting class"
+      weight: 3,
+      detail: "Player is in YouTube's explicit ad-showing/ad-interrupting state"
     });
   }
 
-  // Signal 2: Legitimate ad-skip button present and visible
   for (const selector of SKIP_SELECTORS) {
     const btn = playerElement.querySelector<HTMLElement>(selector);
     if (btn && isElementVisible(btn)) {
@@ -75,7 +82,6 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
     }
   }
 
-  // Signal 3: Ad module container contains visible ad components
   for (const selector of AD_CONTAINER_SELECTORS) {
     const container = playerElement.querySelector<HTMLElement>(selector);
     if (container && isElementVisible(container)) {
@@ -88,9 +94,14 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
     }
   }
 
-  // Signal 4: Ad text countdown / remaining indicator
-  const adText = playerElement.querySelector<HTMLElement>(".ytp-ad-text, .ytp-ad-duration-remaining");
-  if (adText && isElementVisible(adText) && (adText.textContent?.trim().length ?? 0) > 0) {
+  const adText = playerElement.querySelector<HTMLElement>(
+    ".ytp-ad-text, .ytp-ad-duration-remaining"
+  );
+  if (
+    adText &&
+    isElementVisible(adText) &&
+    (adText.textContent?.trim().length ?? 0) > 0
+  ) {
     signals.push({
       name: "AD_TEXT_PRESENT",
       weight: 1,
@@ -98,8 +109,8 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
     });
   }
 
-  // Signal 5: Active ad-module children
-  const adModule = playerElement.querySelector<HTMLElement>(".ytp-ad-module");
+  const adModule =
+    playerElement.querySelector<HTMLElement>(".ytp-ad-module");
   if (adModule && adModule.childElementCount > 0) {
     signals.push({
       name: "AD_MODULE_CHILDREN",
@@ -108,15 +119,14 @@ export function detectAdSignals(playerElement: HTMLElement | null): AdDetectionR
     });
   }
 
-  const score = signals.reduce((sum, s) => sum + s.weight, 0);
+  const score = signals.reduce((sum, signal) => sum + signal.weight, 0);
 
-  // Confidence mechanism:
-  // A confirmed ad REQUIRES the player class indicator AND at least one other independent signal,
-  // OR a visible skip button combined with ad container / score >= 3.
+  // YouTube itself adding ad-showing/ad-interrupting is a strong, explicit signal.
+  // Waiting for a second DOM signal creates a visible delay and is unnecessary.
   const isConfirmedAd =
-    (hasAdShowingClass && signals.length >= 2) ||
-    (hasAdShowingClass && skipButton !== null) ||
-    (score >= 4);
+    hasAdShowingClass ||
+    (skipButton !== null && score >= 3) ||
+    score >= 4;
 
   const isPossibleAd = !isConfirmedAd && signals.length > 0;
 
