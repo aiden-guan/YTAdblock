@@ -121,8 +121,8 @@ describe("PlaybackStateMachine", () => {
     expect(sm.getState()).toBe("CONFIRMED_AD");
     expect(videoEl.muted).toBe(true);
     expect(videoEl.playbackRate).toBe(16);
-    // Sought to video.duration - 0.05 => 60 - 0.05 = 59.95
-    expect(videoEl.currentTime).toBeCloseTo(59.95, 2);
+    // Sought to video.duration - 0.01 => 60 - 0.01 = 59.99
+    expect(videoEl.currentTime).toBeCloseTo(59.99, 2);
   });
 
   it("completely restores exact user volume, speed, and muted state on recovery", () => {
