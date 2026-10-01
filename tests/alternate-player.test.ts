@@ -105,6 +105,8 @@ describe("mergeCleanPlaybackData", () => {
 
     const alternate = JSON.parse(JSON.stringify(cleanFixture));
     alternate.streamingData.formats[0].itag = 999; // Distinct marker
+    alternate.streamingData.serverAbrStreamingUrl =
+      "https://r2---sn-test.googlevideo.com/videoplayback?sabr=1";
 
     const merged = mergeCleanPlaybackData(original, alternate) as Record<string, unknown>;
 
@@ -119,8 +121,10 @@ describe("mergeCleanPlaybackData", () => {
     expect(merged.captions).toEqual(original.captions);
     expect(merged.videoDetails).toEqual(original.videoDetails);
 
-    // Clean streaming data substituted
+    // Clean streaming data substituted. The unvalidated SABR transport is
+    // deliberately removed so the WEB player uses the preflighted transport.
     expect((merged.streamingData as any).formats[0].itag).toBe(999);
+    expect((merged.streamingData as any).serverAbrStreamingUrl).toBeUndefined();
 
     // Original object immutable
     expect(original.adPlacements).toBeDefined();
@@ -130,6 +134,18 @@ describe("mergeCleanPlaybackData", () => {
 
 describe("AlternatePlayerManager race and lifecycle", () => {
   let fakeFetch: any;
+
+  const addProbeableMedia = (data: any, suffix: string) => {
+    const copy = JSON.parse(JSON.stringify(data));
+    copy.streamingData ??= {};
+    copy.streamingData.formats ??= [];
+    if (copy.streamingData.formats.length === 0) {
+      copy.streamingData.formats.push({ itag: 18, mimeType: "video/mp4" });
+    }
+    copy.streamingData.formats[0].url =
+      `https://r1---sn-test.googlevideo.com/videoplayback?id=${suffix}`;
+    return copy;
+  };
 
   beforeEach(() => {
     fakeFetch = vi.fn();
@@ -167,10 +183,14 @@ describe("AlternatePlayerManager race and lifecycle", () => {
 
   it("executes bounded race and selects first valid clean candidate while aborting others", async () => {
     const pool = new PlayerClientPool();
-    const cleanData = JSON.parse(JSON.stringify(cleanFixture));
+    const cleanData = addProbeableMedia(cleanFixture, "race-video-123");
     cleanData.videoDetails.videoId = "race-video-123";
 
     fakeFetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 206 });
+      }
+
       const body = JSON.parse(init.body as string);
       const clientName = body.context?.client?.clientName;
 
@@ -192,6 +212,31 @@ describe("AlternatePlayerManager race and lifecycle", () => {
     expect(result).not.toBeNull();
     expect(result?.candidateId).toBe("web-embedded");
     expect(pool.getPreferredClient()).toBe("web-embedded");
+  });
+
+  it("rejects a structurally clean candidate when its media preflight returns 403", async () => {
+    const pool = new PlayerClientPool();
+    const cleanData = addProbeableMedia(cleanFixture, "probe-403");
+    cleanData.videoDetails.videoId = "probe-403";
+
+    fakeFetch.mockImplementation(async (url: string) => {
+      if (String(url).includes("googlevideo.com")) {
+        return new Response(null, { status: 403 });
+      }
+      return new Response(JSON.stringify(cleanData), { status: 200 });
+    });
+
+    const manager = new AlternatePlayerManager(pool, fakeFetch);
+    const result = await manager.fetchCleanAlternateResponse(
+      { videoId: "probe-403", context: {} },
+      "probe-403",
+      500
+    );
+
+    expect(result).toBeNull();
+    expect(
+      Object.values(pool.getAllStats()).some((stats) => stats.media403s > 0)
+    ).toBe(true);
   });
 
   it("falls back cleanly to null if all candidates fail or return invalid responses", async () => {

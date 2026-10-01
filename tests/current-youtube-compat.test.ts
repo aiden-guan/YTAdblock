@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { capturePlayerRequestPayload } from "../src/main/fetch-interceptor";
-import { validateAlternatePlayerResponse } from "../src/main/alternate-player/response-validator";
+import {
+  validateAlternatePlayerResponse,
+  extractProbeableMediaUrl
+} from "../src/main/alternate-player/response-validator";
 import { AlternatePlayerManager } from "../src/main/alternate-player/alternate-player";
 import { PlayerClientPool } from "../src/main/alternate-player/client-pool";
 
@@ -48,7 +51,7 @@ describe("current YouTube request compatibility", () => {
     expect(payload?.videoId).toBe("init-body-video");
   });
 
-  it("accepts a clean SABR-only player response", () => {
+  it("accepts SABR structurally but does not consider SABR-only safe for substitution", () => {
     const response = {
       playabilityStatus: { status: "OK" },
       videoDetails: {
@@ -64,6 +67,34 @@ describe("current YouTube request compatibility", () => {
     expect(
       validateAlternatePlayerResponse(response, "sabr-video")
     ).toBe(true);
+
+    // SABR is intentionally not a probeable substitution transport. The WEB
+    // player can otherwise sit at 0:00 retrying a transplanted SABR session.
+    expect(extractProbeableMediaUrl(response)).toBeNull();
+  });
+
+  it("extracts a direct GoogleVideo transport for media preflight", () => {
+    const response = {
+      playabilityStatus: { status: "OK" },
+      videoDetails: {
+        videoId: "direct-video",
+        lengthSeconds: "120"
+      },
+      streamingData: {
+        formats: [
+          {
+            itag: 18,
+            url: "https://r1---sn-test.googlevideo.com/videoplayback?id=direct-video"
+          }
+        ],
+        serverAbrStreamingUrl:
+          "https://r2---sn-test.googlevideo.com/videoplayback?sabr=1"
+      }
+    };
+
+    expect(extractProbeableMediaUrl(response)).toBe(
+      "https://r1---sn-test.googlevideo.com/videoplayback?id=direct-video"
+    );
   });
 
   it("uses a true third-party embed URL for WEB_EMBEDDED_PLAYER context", () => {

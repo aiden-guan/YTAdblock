@@ -1,5 +1,8 @@
 import { PlayerClientPool, type PlayerClientProfile } from "./client-pool";
-import { validateAlternatePlayerResponse } from "./response-validator";
+import {
+  validateAlternatePlayerResponse,
+  extractProbeableMediaUrl
+} from "./response-validator";
 import { globalPlaybackTiming } from "../playback-timing";
 
 export interface AlternateSubstitutionResult {
@@ -40,6 +43,70 @@ export class AlternatePlayerManager {
 
   public setNativeFetch(fn: typeof window.fetch): void {
     this.nativeFetch = fn;
+  }
+
+  private async probeMediaAvailability(
+    playerResponse: unknown,
+    parentSignal: AbortSignal
+  ): Promise<{ ok: boolean; reason: string }> {
+    const mediaUrl = extractProbeableMediaUrl(playerResponse);
+    if (!mediaUrl) {
+      return { ok: false, reason: "NO_PROBEABLE_MEDIA" };
+    }
+
+    const controller = new AbortController();
+    const onParentAbort = () => controller.abort();
+    parentSignal.addEventListener("abort", onParentAbort, { once: true });
+
+    const timer = setTimeout(() => controller.abort(), 650);
+
+    try {
+      const response = await this.nativeFetch(mediaUrl, {
+        method: "GET",
+        headers: {
+          Range: "bytes=0-1"
+        },
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "follow",
+        signal: controller.signal
+      });
+
+      if (response.status === 401) {
+        return { ok: false, reason: "MEDIA_401" };
+      }
+      if (response.status === 403) {
+        return { ok: false, reason: "MEDIA_403" };
+      }
+      if (response.status === 410) {
+        return { ok: false, reason: "MEDIA_410" };
+      }
+
+      if (!(response.ok || response.status === 206)) {
+        return {
+          ok: false,
+          reason: `MEDIA_PROBE_HTTP_${response.status}`
+        };
+      }
+
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Headers/status are sufficient for this tiny probe.
+      }
+
+      return { ok: true, reason: "MEDIA_PROBE_OK" };
+    } catch {
+      return {
+        ok: false,
+        reason: controller.signal.aborted
+          ? "MEDIA_PROBE_TIMEOUT_OR_ABORT"
+          : "MEDIA_PROBE_FAILED"
+      };
+    } finally {
+      clearTimeout(timer);
+      parentSignal.removeEventListener("abort", onParentAbort);
+    }
   }
 
   public abortAllPending(): void {
@@ -284,11 +351,28 @@ export class AlternatePlayerManager {
           throw new Error("Validation failed");
         }
 
-        this.clientPool.markSuccess(candidate.id, duration);
+        const probeResult = await this.probeMediaAvailability(
+          data,
+          candidateController.signal
+        );
+
+        if (!probeResult.ok) {
+          this.clientPool.markFailure(candidate.id, probeResult.reason);
+          globalPlaybackTiming.recordCandidateResult({
+            candidateId: candidate.id,
+            clientName: candidate.clientName,
+            durationMs: Date.now() - started,
+            status: "FAILED",
+            error: probeResult.reason
+          });
+          throw new Error(probeResult.reason);
+        }
+
+        this.clientPool.markSuccess(candidate.id, Date.now() - started);
         globalPlaybackTiming.recordCandidateResult({
           candidateId: candidate.id,
           clientName: candidate.clientName,
-          durationMs: duration,
+          durationMs: Date.now() - started,
           status: "VALID"
         });
 
