@@ -60,7 +60,7 @@ export function installXhrInterceptor(
       onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
       globalPlaybackTiming.recordMilestone("PLAYER_REQUEST_STARTED", videoId);
 
-      this.addEventListener(
+      if (typeof this.addEventListener === "function") this.addEventListener(
         "loadend",
         () => {
           try {
@@ -104,7 +104,7 @@ export function installXhrInterceptor(
       const urlStr = (this as any).__ytclean_url || "";
       globalPlaybackTiming.monitorMediaRequest(urlStr, true);
 
-      this.addEventListener(
+      if (typeof this.addEventListener === "function") this.addEventListener(
         "loadend",
         () => {
           globalPlaybackTiming.monitorMediaRequest(urlStr, false);
