@@ -80,7 +80,6 @@ export class AlternatePlayerManager {
       clientVersion: candidate.clientVersion
     };
 
-    // Preserve browser-session fields that are independent of client family.
     for (const key of [
       "hl",
       "gl",
@@ -112,12 +111,15 @@ export class AlternatePlayerManager {
           ? (context.thirdParty as Record<string, unknown>)
           : {};
 
+      // WEB_EMBEDDED_PLAYER expects thirdParty.embedUrl to represent the
+      // external page hosting the embed, not youtube.com itself. This mirrors
+      // maintained Innertube clients and avoids an internally inconsistent
+      // embedded-player request.
       context.thirdParty = {
         ...existingThirdParty,
-        embedUrl: `https://www.youtube.com/embed/${videoId}?html5=1`
+        embedUrl: "https://www.reddit.com/"
       };
     } else if (context.thirdParty && candidate.clientName !== "WEB_EMBEDDED_PLAYER") {
-      // A WEB embed context can invalidate non-embed candidates.
       delete context.thirdParty;
     }
 
@@ -147,7 +149,6 @@ export class AlternatePlayerManager {
       payload.playbackContext = playbackContext;
     }
 
-    // Preserve original values when present; otherwise use permissive playback flags.
     if (payload.contentCheckOk === undefined) payload.contentCheckOk = true;
     if (payload.racyCheckOk === undefined) payload.racyCheckOk = true;
 
@@ -166,8 +167,6 @@ export class AlternatePlayerManager {
       String(candidate.innertubeContextClientName)
     );
     headers.set("x-youtube-client-version", candidate.clientVersion);
-
-    // Never forward body-length values after mutating the body.
     headers.delete("content-length");
 
     return headers;
@@ -183,8 +182,6 @@ export class AlternatePlayerManager {
       return null;
     }
 
-    // Backward-compatible test/default path. Production always supplies the real
-    // request context so the API key, headers and browser session are preserved.
     let requestContext: OriginalPlayerRequestContext;
     if (typeof requestContextOrBudget === "number") {
       timeBudgetMs = requestContextOrBudget;

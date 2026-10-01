@@ -46,31 +46,58 @@ export function extractUrlFromFetchInput(input: RequestInfo | URL): string {
   return String(input);
 }
 
-export function extractPayloadFromInitOrData(
-  init?: RequestInit,
-  _input?: RequestInfo | URL,
-  data?: any
-): Record<string, unknown> | null {
-  if (init?.body && typeof init.body === "string") {
+function parsePlayerPayload(body: string | undefined): Record<string, unknown> | null {
+  if (!body) return null;
+
+  try {
+    const parsed = JSON.parse(body);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Capture the actual JSON payload before native fetch consumes a Request body.
+ *
+ * YouTube may call fetch(new Request(...)) rather than fetch(url, { body }).
+ * The previous implementation only inspected init.body, causing requestPayload
+ * to be null and silently disabling alternate-player substitution for that path.
+ */
+export async function capturePlayerRequestPayload(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Record<string, unknown> | null> {
+  if (typeof init?.body === "string") {
+    return parsePlayerPayload(init.body);
+  }
+
+  if (
+    !init?.body &&
+    typeof Request !== "undefined" &&
+    input instanceof Request &&
+    !input.bodyUsed
+  ) {
     try {
-      return JSON.parse(init.body);
+      return parsePlayerPayload(await input.clone().text());
     } catch {
-      // Ignore malformed request bodies.
+      return null;
     }
   }
 
-  if (data?.videoDetails?.videoId) {
-    return {
-      videoId: data.videoDetails.videoId,
-      context: {
-        client: {
-          clientName: "WEB"
-        }
-      }
-    };
-  }
-
   return null;
+}
+
+export function extractPayloadFromInitOrData(
+  init?: RequestInit,
+  _input?: RequestInfo | URL,
+  _data?: any
+): Record<string, unknown> | null {
+  return typeof init?.body === "string"
+    ? parsePlayerPayload(init.body)
+    : null;
 }
 
 export function extractVideoId(
@@ -89,12 +116,8 @@ export function extractVideoId(
   }
 
   if (init?.body && typeof init.body === "string") {
-    try {
-      const parsed = JSON.parse(init.body);
-      if (parsed.videoId) return parsed.videoId;
-    } catch {
-      // Ignore malformed body.
-    }
+    const parsed = parsePlayerPayload(init.body);
+    if (typeof parsed?.videoId === "string") return parsed.videoId;
   }
 
   return undefined;
@@ -205,7 +228,6 @@ export async function handleFetchResponse(
 
     const { report } = sanitizePlayerResponse(data);
 
-    // Truly clean response: no rewrite and no latency.
     if (!report.changed) {
       if (videoId) {
         globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
@@ -213,9 +235,6 @@ export async function handleFetchResponse(
       return originalResponse;
     }
 
-    // For prerolls, attempt a clean stream substitution using the exact original
-    // request URL / API key / browser session headers. Direct unit callers may
-    // omit requestContext; production interception always supplies the real one.
     const effectiveRequestContext: OriginalPlayerRequestContext = requestContext ?? {
       url: new URL(urlStr, "https://www.youtube.com").href
     };
@@ -248,9 +267,6 @@ export async function handleFetchResponse(
       }
     }
 
-    // IMPORTANT: do not sanitize the original ad-bound session on failure.
-    // Let YouTube initialize the ad stream and let the player fallback terminate
-    // it immediately. This avoids the full-duration blocked-preroll backoff.
     if (videoId) {
       globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
     }
@@ -313,6 +329,12 @@ export function installFetchInterceptor(
       ? snapshotPlayerRequestContext(input, init, targetWindow)
       : undefined;
 
+    // Start cloning the body BEFORE native fetch consumes a Request object, but
+    // do not delay the original YouTube request while the clone is being parsed.
+    const payloadPromise = playerRequest
+      ? capturePlayerRequestPayload(input, init)
+      : Promise.resolve(null);
+
     if (playerRequest) {
       const videoId = extractVideoId(urlStr, init);
       if (videoId) {
@@ -322,8 +344,8 @@ export function installFetchInterceptor(
     }
 
     const response = await boundFetch(input, init);
+    const payload = await payloadPromise;
 
-    const payload = extractPayloadFromInitOrData(init, input);
     return handleFetchResponse(
       response,
       urlStr,
