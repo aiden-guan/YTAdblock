@@ -6,6 +6,12 @@ export type BlockerEvent =
   | { type: "PLAYER_RESPONSE_SEEN" }
   | { type: "PLAYER_RESPONSE_SANITIZED"; removed: string[] }
   | { type: "PLAYER_RESPONSE_SUBSTITUTED"; candidateId: string; videoId?: string }
+  | { type: "PREROLL_DETECTED"; videoId?: string; source: "initial" | "fetch" | "xhr" }
+  | {
+      type: "PREROLL_CLEARED";
+      videoId?: string;
+      reason: "clean_response" | "substituted" | "content_resumed" | "navigation" | "watchdog";
+    }
   | { type: "TIMING_UPDATE"; session: any }
   | { type: "AD_POSSIBLE"; signals: string[] }
   | { type: "AD_CONFIRMED"; signals: string[] }
@@ -79,10 +85,6 @@ export interface UserPlaybackState {
   playbackRate: number;
 }
 
-/**
- * Architectural boundary for player response interception.
- * Allows V1 MainWorld interception or potential future CDP interception.
- */
 export interface PlayerResponseSource {
   start(): Promise<void> | void;
   stop(): Promise<void> | void;
