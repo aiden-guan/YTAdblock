@@ -1,0 +1,66 @@
+{
+  "playabilityStatus": {
+    "status": "OK",
+    "playableInEmbed": true
+  },
+  "streamingData": {
+    "expiresInSeconds": "21540",
+    "formats": [
+      {
+        "itag": 18,
+        "mimeType": "video/mp4; codecs=\"avc1.42001E, mp4a.40.2\"",
+        "bitrate": 640000,
+        "width": 640,
+        "height": 360,
+        "lastModified": "1690000000000",
+        "quality": "medium",
+        "fps": 30,
+        "qualityLabel": "360p",
+        "approxDurationMs": "213000"
+      }
+    ],
+    "adaptiveFormats": [
+      {
+        "itag": 137,
+        "mimeType": "video/mp4; codecs=\"avc1.640028\"",
+        "bitrate": 2500000,
+        "width": 1920,
+        "height": 1080,
+        "qualityLabel": "1080p"
+      }
+    ]
+  },
+  "videoDetails": {
+    "videoId": "dQw4w9WgXcQ",
+    "title": "Clean YouTube Video",
+    "lengthSeconds": "213",
+    "channelId": "UCuAXFkgsw1L7xaCfnd5JJOw",
+    "isOwnerViewing": false,
+    "shortDescription": "Educational demonstration of clean video metadata",
+    "isCrawlable": true,
+    "author": "Clean Content Creator"
+  },
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "captionTracks": [
+        {
+          "baseUrl": "https://www.youtube.com/api/timedtext?v=dQw4w9WgXcQ",
+          "name": { "simpleText": "English" },
+          "vssId": ".en",
+          "languageCode": "en"
+        }
+      ]
+    }
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "title": { "simpleText": "Clean YouTube Video" },
+      "description": { "simpleText": "Educational demonstration" },
+      "lengthSeconds": "213"
+    }
+  },
+  "playbackTracking": {
+    "videostatsPlaybackUrl": { "baseUrl": "https://www.youtube.com/api/stats/playback" },
+    "videostatsWatchtimeUrl": { "baseUrl": "https://www.youtube.com/api/stats/watchtime" }
+  }
+}

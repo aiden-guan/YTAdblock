@@ -1,0 +1,79 @@
+{
+  "playabilityStatus": {
+    "status": "OK",
+    "playableInEmbed": true
+  },
+  "streamingData": {
+    "expiresInSeconds": "21540",
+    "formats": [
+      {
+        "itag": 18,
+        "mimeType": "video/mp4; codecs=\"avc1.42001E, mp4a.40.2\"",
+        "bitrate": 640000,
+        "width": 640,
+        "height": 360,
+        "quality": "medium",
+        "approxDurationMs": "300000"
+      }
+    ]
+  },
+  "videoDetails": {
+    "videoId": "abc123xyz89",
+    "title": "Video With Advertisements Attached",
+    "lengthSeconds": "300",
+    "channelId": "UC1234567890",
+    "isOwnerViewing": false,
+    "shortDescription": "Sample video that contains ad placements and ad slots",
+    "isCrawlable": true,
+    "author": "Sample Creator"
+  },
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "captionTracks": []
+    }
+  },
+  "microformat": {
+    "playerMicroformatRenderer": {
+      "title": { "simpleText": "Video With Advertisements Attached" },
+      "lengthSeconds": "300"
+    }
+  },
+  "playbackTracking": {
+    "videostatsPlaybackUrl": { "baseUrl": "https://www.youtube.com/api/stats/playback" },
+    "videostatsWatchtimeUrl": { "baseUrl": "https://www.youtube.com/api/stats/watchtime" }
+  },
+  "adPlacements": [
+    {
+      "adPlacementRenderer": {
+        "config": {
+          "adTimeOffset": { "offset": "0" }
+        }
+      }
+    },
+    {
+      "adPlacementRenderer": {
+        "config": {
+          "adTimeOffset": { "offset": "120000" }
+        }
+      }
+    }
+  ],
+  "playerAds": [
+    {
+      "playerLegacyDesktopWatchAdsRenderer": {
+        "playerAdParams": {
+          "showAdBreakCountdown": true
+        }
+      }
+    }
+  ],
+  "adSlots": [
+    {
+      "adSlotRenderer": {
+        "adSlotType": "SLOT_TYPE_PLAYER_BYTE",
+        "slotIdentifier": "slot-0"
+      }
+    }
+  ],
+  "adBreakHeartbeatParams": "encoded_heartbeat_token_here"
+}

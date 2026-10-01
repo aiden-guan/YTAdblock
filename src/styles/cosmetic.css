@@ -1,0 +1,46 @@
+/**
+ * YouTube Clean - Cosmetic Filtering Stylesheet
+ * Strictly targets verified advertising and sponsored UI components.
+ * General-purpose containers, comments, chapters, and recommendations are NEVER hidden.
+ * Supports runtime toggle via html[ytclean-cosmetic-disabled="true"].
+ */
+
+/* Verified standalone ad slot renderers */
+html:not([ytclean-cosmetic-disabled="true"]) ytd-ad-slot-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-display-ad-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-promoted-sparkles-web-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-promoted-video-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-in-feed-ad-layout-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-banner-promo-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-statement-banner-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) ytd-action-companion-ad-renderer,
+html:not([ytclean-cosmetic-disabled="true"]) #masthead-ad {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Verified grid/feed items containing an ad slot */
+html:not([ytclean-cosmetic-disabled="true"]) ytd-rich-item-renderer:has(> #content > ytd-ad-slot-renderer),
+html:not([ytclean-cosmetic-disabled="true"]) ytd-rich-item-renderer:has(ytd-in-feed-ad-layout-renderer),
+html:not([ytclean-cosmetic-disabled="true"]) ytd-rich-section-renderer:has(ytd-ad-slot-renderer) {
+  display: none !important;
+}
+
+/* In-player ad overlay banners and companion cards */
+html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-overlay-container,
+html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-overlay-slot,
+html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-image-overlay,
+html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-text-overlay {
+  display: none !important;
+}
+
+/* Shorts ad slots and sponsored reels */
+html:not([ytclean-cosmetic-disabled="true"]) ytd-reel-video-renderer:has(ytd-ad-slot-renderer),
+html:not([ytclean-cosmetic-disabled="true"]) ytd-reel-video-renderer:has(ytd-reel-ad-header-renderer),
+html:not([ytclean-cosmetic-disabled="true"]) ytd-reel-item-renderer:has(.badge-shape-wiz--ad) {
+  display: none !important;
+}

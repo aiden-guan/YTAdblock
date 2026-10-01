@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Clean</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="title-group">
+        <span class="app-name">YouTube Clean</span>
+        <span id="protection-badge" class="badge badge-on">ON</span>
+      </div>
+    </header>
+
+    <div class="divider"></div>
+
+    <section class="metrics-section">
+      <div class="section-label">This session</div>
+      <div class="metric-row">
+        <span class="metric-label">Responses cleaned</span>
+        <span id="count-cleaned" class="metric-value">0</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Ads fallback-handled</span>
+        <span id="count-fallback" class="metric-value">0</span>
+      </div>
+      <div class="metric-row">
+        <span class="metric-label">Promotions hidden</span>
+        <span id="count-cosmetic" class="metric-value">0</span>
+      </div>
+      <div class="metric-row status-row">
+        <span class="metric-label">Status</span>
+        <span id="system-status" class="status-value status-healthy">Healthy</span>
+      </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <div class="action-section">
+      <button id="toggle-protection" class="btn btn-primary">Protection ON</button>
+    </div>
+
+    <div class="settings-section">
+      <label class="setting-item">
+        <input type="checkbox" id="check-cosmetic" checked>
+        <span>Cosmetic filtering</span>
+      </label>
+      <label class="setting-item">
+        <input type="checkbox" id="check-debug">
+        <span>Debug logging</span>
+      </label>
+    </div>
+
+    <div class="divider"></div>
+
+    <details class="diagnostics-details" id="startup-diagnostics-card">
+      <summary class="section-label" style="cursor: pointer; margin-bottom: 6px;">
+        Playback startup &gt;
+      </summary>
+      <div class="startup-content" id="startup-content">
+        <div class="metric-row">
+          <span class="metric-label">Preroll detected</span>
+          <span id="timing-preroll" class="metric-value">No</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Estimated preroll</span>
+          <span id="timing-estimated-preroll" class="metric-value">0.0s</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Selected client</span>
+          <span id="timing-selected-client" class="metric-value">None</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Avoided wait</span>
+          <span id="timing-avoided-wait" class="metric-value">0.0s</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Suspected cause</span>
+          <span id="timing-suspected-cause" class="metric-value">NONE</span>
+        </div>
+      </div>
+    </details>
+
+    <div class="divider"></div>
+
+    <footer class="footer">
+      <button id="btn-export-diagnostics" class="btn btn-secondary">Export Diagnostics &gt;</button>
+      <div id="export-feedback" class="export-feedback" style="display: none;"></div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "unexpectedStructure": 12345,
+  "nestedCorrupt": [
+    null,
+    true,
+    "garbage"
+  ]
+}
