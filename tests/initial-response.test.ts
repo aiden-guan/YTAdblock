@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { installInitialPlayerResponseHook } from "../src/main/initial-response";
 import cleanFixture from "./fixtures/player-clean.json";
 import adFixture from "./fixtures/player-with-ads.json";
@@ -13,45 +13,47 @@ describe("initial-response", () => {
     emittedEvents = [];
   });
 
-  it("sanitizes ytInitialPlayerResponse on subsequent assignment", () => {
-    const teardown = installInitialPlayerResponseHook(fakeWindow, (ev) => emittedEvents.push(ev));
+  it("preserves preroll-bound initial response so YouTube can advance the real ad state", () => {
+    const teardown = installInitialPlayerResponseHook(
+      fakeWindow,
+      (ev) => emittedEvents.push(ev)
+    );
 
     fakeWindow.ytInitialPlayerResponse = JSON.parse(JSON.stringify(adFixture));
 
     const result = fakeWindow.ytInitialPlayerResponse;
-    expect(result.adPlacements).toBeUndefined();
-    expect(result.playerAds).toBeUndefined();
+    expect(result.adPlacements).toBeDefined();
+    expect(result.playerAds).toBeDefined();
     expect(result.videoDetails).toBeDefined();
-
-    expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" },
-      {
-        type: "PLAYER_RESPONSE_SANITIZED",
-        removed: expect.arrayContaining(["adPlacements", "playerAds"])
-      }
-    ]);
-
-    teardown();
-  });
-
-  it("preserves clean response on assignment without unnecessary modification", () => {
-    const teardown = installInitialPlayerResponseHook(fakeWindow, (ev) => emittedEvents.push(ev));
-
-    fakeWindow.ytInitialPlayerResponse = cleanFixture;
-    expect(fakeWindow.ytInitialPlayerResponse).toBe(cleanFixture);
-
     expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
 
     teardown();
   });
 
-  it("sanitizes ytInitialPlayerResponse if it was pre-existing before install", () => {
+  it("preserves clean response on assignment without unnecessary modification", () => {
+    const teardown = installInitialPlayerResponseHook(
+      fakeWindow,
+      (ev) => emittedEvents.push(ev)
+    );
+
+    fakeWindow.ytInitialPlayerResponse = cleanFixture;
+    expect(fakeWindow.ytInitialPlayerResponse).toBe(cleanFixture);
+    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
+
+    teardown();
+  });
+
+  it("preserves a pre-existing preroll response rather than manufacturing an incomplete player state", () => {
     fakeWindow.ytInitialPlayerResponse = JSON.parse(JSON.stringify(adFixture));
 
-    const teardown = installInitialPlayerResponseHook(fakeWindow, (ev) => emittedEvents.push(ev));
+    const teardown = installInitialPlayerResponseHook(
+      fakeWindow,
+      (ev) => emittedEvents.push(ev)
+    );
 
-    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeUndefined();
-    expect(fakeWindow.ytInitialPlayerResponse.playerAds).toBeUndefined();
+    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeDefined();
+    expect(fakeWindow.ytInitialPlayerResponse.playerAds).toBeDefined();
+    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
 
     teardown();
   });
@@ -62,9 +64,8 @@ describe("initial-response", () => {
     fakeWindow.ytInitialPlayerResponse = { videoDetails: { id: "1" } };
     expect(fakeWindow.ytInitialPlayerResponse.videoDetails.id).toBe("1");
 
-    fakeWindow.ytInitialPlayerResponse = { videoDetails: { id: "2" }, adPlacements: [1] };
-    expect(fakeWindow.ytInitialPlayerResponse.videoDetails.id).toBe("2");
-    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeUndefined();
+    fakeWindow.ytInitialPlayerResponse = JSON.parse(JSON.stringify(adFixture));
+    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeDefined();
 
     teardown();
   });
@@ -74,7 +75,7 @@ describe("initial-response", () => {
     const teardown2 = installInitialPlayerResponseHook(fakeWindow);
 
     fakeWindow.ytInitialPlayerResponse = JSON.parse(JSON.stringify(adFixture));
-    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeUndefined();
+    expect(fakeWindow.ytInitialPlayerResponse.adPlacements).toBeDefined();
 
     teardown1();
     teardown2();
