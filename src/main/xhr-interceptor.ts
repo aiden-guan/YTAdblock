@@ -1,5 +1,4 @@
 import { isPlayerEndpoint, isMediaEndpoint, extractVideoId } from "./fetch-interceptor";
-import { sanitizePlayerResponse } from "./player-response";
 import { detectPrerollInfo } from "./preroll-detector";
 import { globalPlaybackTiming } from "./playback-timing";
 import { globalAlternatePlayer } from "./alternate-player/alternate-player";
@@ -8,8 +7,12 @@ import type { BlockerEvent } from "../types/events";
 export type XhrEventCallback = (event: BlockerEvent) => void;
 
 /**
- * Narrowly-scoped XMLHttpRequest interceptor for YouTube player endpoints and media streams.
- * Only activates when open() is invoked with a targeted player endpoint or media stream URL.
+ * Observe XHR-based player/media requests without rewriting player responses.
+ *
+ * We intentionally avoid stripping ad fields from XHR responses because doing so
+ * while retaining the original ad-bound streaming session can trigger YouTube's
+ * preroll-duration playback backoff. Fetch responses can use verified alternate
+ * substitution; XHR falls back to rapid player-level ad completion.
  */
 export function installXhrInterceptor(
   targetWindow: Window = window,
@@ -18,25 +21,15 @@ export function installXhrInterceptor(
   const installKey = Symbol.for("ytclean.xhr.installed");
   const win = targetWindow as unknown as Record<symbol, boolean>;
 
-  if (win[installKey]) {
-    return () => {};
-  }
+  if (win[installKey]) return () => {};
 
-  const OriginalXHR = (targetWindow as any).XMLHttpRequest as typeof XMLHttpRequest | undefined;
-  if (!OriginalXHR) {
-    return () => {};
-  }
+  const OriginalXHR = (targetWindow as any).XMLHttpRequest as
+    | typeof XMLHttpRequest
+    | undefined;
+  if (!OriginalXHR) return () => {};
 
   const originalOpen = OriginalXHR.prototype.open;
   const originalSend = OriginalXHR.prototype.send;
-  const originalResponseTextDescriptor = Object.getOwnPropertyDescriptor(
-    OriginalXHR.prototype,
-    "responseText"
-  );
-  const originalResponseDescriptor = Object.getOwnPropertyDescriptor(
-    OriginalXHR.prototype,
-    "response"
-  );
 
   OriginalXHR.prototype.open = function (
     this: XMLHttpRequest,
@@ -55,88 +48,7 @@ export function installXhrInterceptor(
     if (isPlayer) {
       const videoId = extractVideoId(urlStr);
       (this as any).__ytclean_video_id = videoId;
-      if (videoId) {
-        globalPlaybackTiming.startSession(videoId);
-      }
-
-      let sanitizedCache: { text?: string; json?: unknown } | null = null;
-      let hasSanitized = false;
-
-      const computeSanitized = (xhr: XMLHttpRequest) => {
-        if (hasSanitized) return sanitizedCache;
-        if (xhr.readyState !== 4 || xhr.status < 200 || xhr.status >= 300) {
-          return null;
-        }
-
-        hasSanitized = true;
-        try {
-          const rawText = originalResponseTextDescriptor?.get
-            ? originalResponseTextDescriptor.get.call(xhr)
-            : (xhr as any)._rawResponseText;
-
-          if (rawText && typeof rawText === "string") {
-            const parsed = JSON.parse(rawText);
-            const resolvedVid = (xhr as any).__ytclean_video_id || parsed?.videoDetails?.videoId;
-
-            globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RECEIVED", resolvedVid);
-
-            const prerollInfo = detectPrerollInfo(parsed);
-            globalPlaybackTiming.setPrerollInfo(prerollInfo, resolvedVid);
-
-            const { sanitized, report } = sanitizePlayerResponse(parsed);
-
-            globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", resolvedVid);
-
-            if (report.changed) {
-              const sanitizedText = JSON.stringify(sanitized);
-              sanitizedCache = { text: sanitizedText, json: sanitized };
-              onEvent?.({
-                type: "PLAYER_RESPONSE_SANITIZED",
-                removed: report.removed
-              });
-              return sanitizedCache;
-            }
-          }
-        } catch (err) {
-          onEvent?.({
-            type: "ERROR",
-            subsystem: "XHR_SANITIZER",
-            message: err instanceof Error ? err.message : String(err)
-          });
-        }
-        return null;
-      };
-
-      Object.defineProperty(this, "responseText", {
-        configurable: true,
-        get() {
-          const cached = computeSanitized(this);
-          if (cached?.text !== undefined) {
-            return cached.text;
-          }
-          return originalResponseTextDescriptor?.get
-            ? originalResponseTextDescriptor.get.call(this)
-            : (this as any)._rawResponseText;
-        }
-      });
-
-      Object.defineProperty(this, "response", {
-        configurable: true,
-        get() {
-          const cached = computeSanitized(this);
-          if (cached) {
-            if (this.responseType === "json" && cached.json !== undefined) {
-              return cached.json;
-            }
-            if ((this.responseType === "" || this.responseType === "text") && cached.text !== undefined) {
-              return cached.text;
-            }
-          }
-          return originalResponseDescriptor?.get
-            ? originalResponseDescriptor.get.call(this)
-            : (this as any)._rawResponse;
-        }
-      });
+      if (videoId) globalPlaybackTiming.startSession(videoId);
     }
 
     return (originalOpen as Function).apply(this, [method, url, ...rest]);
@@ -144,9 +56,50 @@ export function installXhrInterceptor(
 
   OriginalXHR.prototype.send = function (this: XMLHttpRequest, ...args: any[]) {
     if ((this as any).__ytclean_is_player) {
-      onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
       const videoId = (this as any).__ytclean_video_id;
+      onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
       globalPlaybackTiming.recordMilestone("PLAYER_REQUEST_STARTED", videoId);
+
+      this.addEventListener(
+        "loadend",
+        () => {
+          try {
+            if (this.status < 200 || this.status >= 300) return;
+
+            let parsed: any = null;
+            if (this.responseType === "json" && this.response && typeof this.response === "object") {
+              parsed = this.response;
+            } else if (
+              (this.responseType === "" || this.responseType === "text") &&
+              typeof this.responseText === "string" &&
+              this.responseText
+            ) {
+              parsed = JSON.parse(this.responseText);
+            }
+
+            if (!parsed) return;
+
+            const resolvedVideoId =
+              videoId || parsed?.videoDetails?.videoId || undefined;
+
+            globalPlaybackTiming.recordMilestone(
+              "PLAYER_RESPONSE_RECEIVED",
+              resolvedVideoId
+            );
+            globalPlaybackTiming.setPrerollInfo(
+              detectPrerollInfo(parsed),
+              resolvedVideoId
+            );
+            globalPlaybackTiming.recordMilestone(
+              "PLAYER_RESPONSE_RETURNED_TO_YOUTUBE",
+              resolvedVideoId
+            );
+          } catch {
+            // Diagnostics are best-effort only. Never interfere with the response.
+          }
+        },
+        { once: true }
+      );
     } else if ((this as any).__ytclean_is_media) {
       const urlStr = (this as any).__ytclean_url || "";
       globalPlaybackTiming.monitorMediaRequest(urlStr, true);
@@ -156,9 +109,13 @@ export function installXhrInterceptor(
         () => {
           globalPlaybackTiming.monitorMediaRequest(urlStr, false);
           if (this.status === 401 || this.status === 403 || this.status === 410) {
-            const preferred = globalAlternatePlayer.getClientPool().getPreferredClient();
+            const preferred = globalAlternatePlayer
+              .getClientPool()
+              .getPreferredClient();
             if (preferred) {
-              globalAlternatePlayer.getClientPool().markFailure(preferred, "MEDIA_403");
+              globalAlternatePlayer
+                .getClientPool()
+                .markFailure(preferred, `MEDIA_${this.status}`);
             }
           }
         },
