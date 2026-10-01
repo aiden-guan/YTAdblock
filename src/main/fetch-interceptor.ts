@@ -214,12 +214,17 @@ export async function handleFetchResponse(
     }
 
     // For prerolls, attempt a clean stream substitution using the exact original
-    // request URL / API key / browser session headers.
-    if (prerollInfo.hasPreroll && requestPayload && videoId && requestContext) {
+    // request URL / API key / browser session headers. Direct unit callers may
+    // omit requestContext; production interception always supplies the real one.
+    const effectiveRequestContext: OriginalPlayerRequestContext = requestContext ?? {
+      url: new URL(urlStr, "https://www.youtube.com").href
+    };
+
+    if (prerollInfo.hasPreroll && requestPayload && videoId) {
       const alternateResult = await alternateManager.fetchCleanAlternateResponse(
         requestPayload,
         videoId,
-        requestContext,
+        effectiveRequestContext,
         1200
       );
 
