@@ -162,7 +162,7 @@ export function snapshotPlayerRequestContext(
     url,
     headers,
     credentials: init?.credentials ?? request?.credentials ?? "same-origin",
-    referrer: init?.referrer ?? request?.referrer || targetWindow.location?.href,
+    referrer: (init?.referrer ?? request?.referrer) || targetWindow.location?.href,
     referrerPolicy: init?.referrerPolicy ?? request?.referrerPolicy
   };
 }
