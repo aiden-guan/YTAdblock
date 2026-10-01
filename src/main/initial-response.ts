@@ -8,10 +8,11 @@ export type InitialResponseEventCallback = (event: BlockerEvent) => void;
 /**
  * Defensive hook for window.ytInitialPlayerResponse.
  *
- * Traps assignments to `window.ytInitialPlayerResponse` before or during page load,
- * captures preroll diagnostics before sanitization, sanitizes any advertising structures
- * before YouTube's player components read it, and maintains transparent getter/setter
- * semantics with fail-open behavior.
+ * Important: this hook is synchronous, so it cannot safely perform an alternate
+ * /player request before YouTube consumes the value. If the initial response is
+ * preroll-bound, deleting its ad fields can leave the original streaming session
+ * in a server/player backoff state. In that case we now preserve the response
+ * intact and let the fast DOM fallback advance the real ad instead.
  */
 export function installInitialPlayerResponseHook(
   targetWindow: Window = window,
@@ -22,10 +23,7 @@ export function installInitialPlayerResponseHook(
     ytInitialPlayerResponse?: unknown;
   };
 
-  if (win[hookSymbol]) {
-    // Idempotent
-    return () => {};
-  }
+  if (win[hookSymbol]) return () => {};
 
   const processResponseValue = (value: unknown): unknown => {
     if (value === null || typeof value !== "object") {
@@ -45,10 +43,23 @@ export function installInitialPlayerResponseHook(
 
     onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
 
+    if (prerollInfo.hasPreroll) {
+      if (videoId) {
+        globalPlaybackTiming.recordMilestone(
+          "PLAYER_RESPONSE_RETURNED_TO_YOUTUBE",
+          videoId
+        );
+      }
+      return value;
+    }
+
     const { sanitized, report } = sanitizePlayerResponse(value);
 
     if (videoId) {
-      globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
+      globalPlaybackTiming.recordMilestone(
+        "PLAYER_RESPONSE_RETURNED_TO_YOUTUBE",
+        videoId
+      );
     }
 
     if (report.changed) {
@@ -64,12 +75,10 @@ export function installInitialPlayerResponseHook(
 
   let currentValue: unknown = win.ytInitialPlayerResponse;
 
-  // If already present upon execution, sanitize it immediately
   if (currentValue !== undefined) {
     try {
       currentValue = processResponseValue(currentValue);
     } catch (err) {
-      // Fail-open: keep original value
       onEvent?.({
         type: "ERROR",
         subsystem: "INITIAL_RESPONSE",
@@ -78,7 +87,10 @@ export function installInitialPlayerResponseHook(
     }
   }
 
-  const originalDescriptor = Object.getOwnPropertyDescriptor(targetWindow, "ytInitialPlayerResponse");
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    targetWindow,
+    "ytInitialPlayerResponse"
+  );
 
   try {
     Object.defineProperty(targetWindow, "ytInitialPlayerResponse", {
@@ -91,7 +103,6 @@ export function installInitialPlayerResponseHook(
         try {
           currentValue = processResponseValue(newValue);
         } catch (err) {
-          // Fail-open: assign unadulterated value on unexpected error
           currentValue = newValue;
           onEvent?.({
             type: "ERROR",
@@ -103,22 +114,25 @@ export function installInitialPlayerResponseHook(
     });
 
     win[hookSymbol] = true;
-  } catch (_e) {
-    // If defineProperty fails (e.g. non-configurable), do not break global object
+  } catch {
     return () => {};
   }
 
   return () => {
     try {
       if (originalDescriptor) {
-        Object.defineProperty(targetWindow, "ytInitialPlayerResponse", originalDescriptor);
+        Object.defineProperty(
+          targetWindow,
+          "ytInitialPlayerResponse",
+          originalDescriptor
+        );
       } else {
         delete (targetWindow as any).ytInitialPlayerResponse;
         (targetWindow as any).ytInitialPlayerResponse = currentValue;
       }
       delete win[hookSymbol];
     } catch {
-      // Ignore teardown failure
+      // Ignore teardown failure.
     }
   };
 }
