@@ -48,8 +48,9 @@ import { CosmeticController } from "./cosmetic-controller";
     root.setAttribute(PREROLL_SHIELD_ATTRIBUTE, "true");
     clearPrerollShieldWatchdog();
 
-    // Fail open instead of ever leaving a permanent black player if YouTube
-    // changes its lifecycle and the normal clear signal never arrives.
+    // MAIN world owns the authoritative shield lifecycle. Keep this isolated-
+    // world fail-safe deliberately longer than a normal preroll so it cannot
+    // expose an advertiser end card while MAIN is still finishing the ad.
     prerollShieldWatchdog = setTimeout(() => {
       root.removeAttribute(PREROLL_SHIELD_ATTRIBUTE);
       prerollShieldWatchdog = null;
@@ -57,7 +58,7 @@ import { CosmeticController } from "./cosmetic-controller";
         type: "PREROLL_CLEARED",
         reason: "watchdog"
       });
-    }, 12_000);
+    }, 45_000);
   }
 
   // Mirror the MAIN-world pre-arm for direct watch-page loads. This is

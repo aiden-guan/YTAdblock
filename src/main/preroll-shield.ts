@@ -1,7 +1,8 @@
 import type { BlockerEvent } from "../types/events";
 
 const SHIELD_ATTRIBUTE = "ytclean-preroll-pending";
-const WATCHDOG_MS = 12_000;
+const SOFT_WATCHDOG_MS = 12_000;
+const HARD_WATCHDOG_MS = 45_000;
 
 export type ShieldClearReason =
   | "substituted"
@@ -25,7 +26,8 @@ export class PrerollShieldController {
   private active = false;
   private activeVideoId: string | undefined;
   private confirmedPreroll = false;
-  private watchdog: ReturnType<typeof setTimeout> | null = null;
+  private softWatchdog: ReturnType<typeof setTimeout> | null = null;
+  private hardWatchdog: ReturnType<typeof setTimeout> | null = null;
   private rootObserver: MutationObserver | null = null;
 
   constructor(private readonly targetDocument: Document = document) {}
@@ -47,7 +49,7 @@ export class PrerollShieldController {
     this.activeVideoId = undefined;
     this.confirmedPreroll = false;
     this.applyAttribute(true);
-    this.restartWatchdog();
+    this.restartWatchdogs();
   }
 
   /**
@@ -62,7 +64,7 @@ export class PrerollShieldController {
     }
     this.confirmedPreroll = true;
     this.applyAttribute(true);
-    this.restartWatchdog();
+    this.restartWatchdogs();
   }
 
   /**
@@ -89,7 +91,7 @@ export class PrerollShieldController {
     this.active = false;
     this.activeVideoId = undefined;
     this.confirmedPreroll = false;
-    this.stopWatchdog();
+    this.stopWatchdogs();
     this.applyAttribute(false);
   }
 
@@ -180,17 +182,43 @@ export class PrerollShieldController {
     });
   }
 
-  private restartWatchdog(): void {
-    this.stopWatchdog();
-    this.watchdog = setTimeout(() => {
+  private restartWatchdogs(): void {
+    this.stopWatchdogs();
+
+    // Soft fail-open is only for pre-armed clean navigations that somehow never
+    // produce a reliable content signal. Once a preroll is explicitly confirmed,
+    // this timer MUST NOT reveal the ad/end-card.
+    this.softWatchdog = setTimeout(() => {
+      this.softWatchdog = null;
+
+      if (!this.active) return;
+
+      if (this.confirmedPreroll) {
+        return;
+      }
+
       this.clear("watchdog");
-    }, WATCHDOG_MS);
+    }, SOFT_WATCHDOG_MS);
+
+    // Absolute safety cap: never leave a tab permanently black if YouTube changes
+    // its lifecycle so completely that neither recovery nor substitution fires.
+    this.hardWatchdog = setTimeout(() => {
+      this.hardWatchdog = null;
+      if (this.active) {
+        this.clear("watchdog");
+      }
+    }, HARD_WATCHDOG_MS);
   }
 
-  private stopWatchdog(): void {
-    if (this.watchdog !== null) {
-      clearTimeout(this.watchdog);
-      this.watchdog = null;
+  private stopWatchdogs(): void {
+    if (this.softWatchdog !== null) {
+      clearTimeout(this.softWatchdog);
+      this.softWatchdog = null;
+    }
+
+    if (this.hardWatchdog !== null) {
+      clearTimeout(this.hardWatchdog);
+      this.hardWatchdog = null;
     }
   }
 }
