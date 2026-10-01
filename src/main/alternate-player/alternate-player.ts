@@ -124,6 +124,29 @@ export class AlternatePlayerManager {
     payload.context = context;
     payload.videoId = videoId;
 
+    if (candidate.useAdPlaybackContext) {
+      const playbackContext =
+        payload.playbackContext &&
+        typeof payload.playbackContext === "object" &&
+        !Array.isArray(payload.playbackContext)
+          ? (payload.playbackContext as Record<string, unknown>)
+          : {};
+
+      const existingAdPlaybackContext =
+        playbackContext.adPlaybackContext &&
+        typeof playbackContext.adPlaybackContext === "object" &&
+        !Array.isArray(playbackContext.adPlaybackContext)
+          ? (playbackContext.adPlaybackContext as Record<string, unknown>)
+          : {};
+
+      playbackContext.adPlaybackContext = {
+        ...existingAdPlaybackContext,
+        pyv: true
+      };
+
+      payload.playbackContext = playbackContext;
+    }
+
     // Preserve original values when present; otherwise use permissive playback flags.
     if (payload.contentCheckOk === undefined) payload.contentCheckOk = true;
     if (payload.racyCheckOk === undefined) payload.racyCheckOk = true;
