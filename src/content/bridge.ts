@@ -60,6 +60,13 @@ import { CosmeticController } from "./cosmetic-controller";
     }, 12_000);
   }
 
+  // Mirror the MAIN-world pre-arm for direct watch-page loads. This is
+  // redundant by design: either world can establish the shared DOM attribute
+  // without waiting for cross-world event ordering.
+  if (window.location.pathname === "/watch") {
+    setPrerollShield(true);
+  }
+
   const cosmeticController = new CosmeticController(document, (event) => {
     handleIncomingEvent(event);
   });
@@ -122,9 +129,16 @@ import { CosmeticController } from "./cosmetic-controller";
     // Shield changes happen before diagnostics so the visual response is as close
     // as possible to the player-response event that triggered them.
     if (
-      event.type === "PREROLL_CLEARED" ||
       event.type === "PLAYER_RESPONSE_SUBSTITUTED" ||
-      event.type === "CONTENT_RESUMED"
+      event.type === "CONTENT_RESUMED" ||
+      (
+        event.type === "PREROLL_CLEARED" &&
+        (
+          event.reason === "substituted" ||
+          event.reason === "content_resumed" ||
+          event.reason === "watchdog"
+        )
+      )
     ) {
       setPrerollShield(false);
     }
@@ -158,11 +172,19 @@ import { CosmeticController } from "./cosmetic-controller";
     }
   }) as EventListener);
 
-  // Clear any prior-video shield immediately at SPA navigation start. If the
-  // incoming video has a preroll, its player response will set it again before
-  // the ad is painted.
+  // Pre-arm every SPA destination before a new watch player can paint. The
+  // selector has no visible effect on non-watch pages because #movie_player is
+  // absent there; non-watch destinations clear on navigation finish.
   window.addEventListener("yt-navigate-start", () => {
-    setPrerollShield(false);
+    if (currentSettings.protectionEnabled) {
+      setPrerollShield(true);
+    }
+  });
+
+  window.addEventListener("yt-navigate-finish", () => {
+    if (window.location.pathname !== "/watch") {
+      setPrerollShield(false);
+    }
   });
 
   window.addEventListener("beforeunload", () => {
