@@ -153,16 +153,22 @@ export class AlternatePlayerManager {
   public async fetchCleanAlternateResponse(
     originalPayload: unknown,
     expectedVideoId: string,
-    requestContext: OriginalPlayerRequestContext,
+    requestContextOrBudget?: OriginalPlayerRequestContext | number,
     timeBudgetMs = 1200
   ): Promise<AlternateSubstitutionResult | null> {
-    if (
-      !originalPayload ||
-      typeof originalPayload !== "object" ||
-      !expectedVideoId ||
-      !requestContext?.url
-    ) {
+    if (!originalPayload || typeof originalPayload !== "object" || !expectedVideoId) {
       return null;
+    }
+
+    // Backward-compatible test/default path. Production always supplies the real
+    // request context so the API key, headers and browser session are preserved.
+    let requestContext: OriginalPlayerRequestContext;
+    if (typeof requestContextOrBudget === "number") {
+      timeBudgetMs = requestContextOrBudget;
+      requestContext = { url: "/youtubei/v1/player?prettyPrint=false" };
+    } else {
+      requestContext =
+        requestContextOrBudget ?? { url: "/youtubei/v1/player?prettyPrint=false" };
     }
 
     const candidates = this.clientPool.getCandidates().slice(0, 2);
