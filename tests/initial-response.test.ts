@@ -24,7 +24,12 @@ describe("initial-response", () => {
     expect(result.videoDetails).toBeDefined();
 
     expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" }
+      { type: "PLAYER_RESPONSE_SEEN" },
+      {
+        type: "PREROLL_DETECTED",
+        videoId: adFixture.videoDetails.videoId,
+        source: "initial"
+      }
     ]);
 
     teardown();
@@ -36,7 +41,14 @@ describe("initial-response", () => {
     fakeWindow.ytInitialPlayerResponse = cleanFixture;
     expect(fakeWindow.ytInitialPlayerResponse).toBe(cleanFixture);
 
-    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
+    expect(emittedEvents).toEqual([
+      { type: "PLAYER_RESPONSE_SEEN" },
+      {
+        type: "PREROLL_CLEARED",
+        videoId: cleanFixture.videoDetails.videoId,
+        reason: "clean_response"
+      }
+    ]);
 
     teardown();
   });
