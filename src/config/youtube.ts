@@ -3,18 +3,10 @@
  * ad fields, and runtime constants.
  */
 
-/**
- * Endpoints targeted for player-response sanitization.
- * Only exact or prefix matches against the pathname are inspected.
- */
 export const TARGET_PLAYER_PATHS = [
   "/youtubei/v1/player"
 ] as const;
 
-/**
- * Verified top-level advertising fields in player API responses.
- * Strictly allowlisted: never blindly delete arbitrary keys.
- */
 export const KNOWN_PLAYER_AD_FIELDS = new Set<string>([
   "adPlacements",
   "playerAds",
@@ -23,9 +15,6 @@ export const KNOWN_PLAYER_AD_FIELDS = new Set<string>([
   "adBreakParams"
 ]);
 
-/**
- * Legitimate player metadata fields that MUST NEVER be removed.
- */
 export const ESSENTIAL_PLAYER_FIELDS = [
   "streamingData",
   "videoDetails",
@@ -36,22 +25,31 @@ export const ESSENTIAL_PLAYER_FIELDS = [
 ] as const;
 
 /**
- * Selectors for YouTube player ad-skip buttons.
- * Checked in order of appearance in modern vs classic players.
+ * Current + legacy YouTube skip controls.
+ *
+ * The slot/container selectors matter because YouTube A/B tests the internal
+ * button class. Semantic aria-label selectors are kept inside the player only.
  */
 export const SKIP_SELECTORS = [
   ".ytp-skip-ad-button",
+  ".ytp-skip-ad-button-modern",
   ".ytp-ad-skip-button",
   ".ytp-ad-skip-button-modern",
+  ".ytp-ad-skip-button-slot button",
+  ".ytp-ad-skip-button-container button",
   "button.ytp-ad-skip-button",
   ".ytp-ad-skip-button-text",
   "[id^='skip-button:']",
+  "button[aria-label^='Skip ad']",
+  "button[aria-label='Skip']",
+  "[role='button'][aria-label^='Skip ad']",
   ".ytp-ad-overlay-close-button",
   "button.ytp-ad-overlay-close-button"
 ] as const;
 
 /**
- * Ad container elements within the YouTube player module.
+ * Verified player-ad UI surfaces. These are detection signals, not blanket
+ * document selectors, and are queried only inside #movie_player.
  */
 export const AD_CONTAINER_SELECTORS = [
   ".video-ads",
@@ -61,13 +59,15 @@ export const AD_CONTAINER_SELECTORS = [
   ".ytp-ad-overlay-container",
   ".ytp-ad-text",
   ".ytp-ad-preview-container",
-  ".ytp-ad-duration-remaining"
+  ".ytp-ad-duration-remaining",
+  ".ytp-ad-progress",
+  ".ytp-ad-progress-list",
+  ".ytp-ad-skip-button-container",
+  ".ytp-ad-skip-button-slot",
+  ".ytp-visit-advertiser-link",
+  ".ytp-visit-advertiser-link__text"
 ] as const;
 
-/**
- * Selectors for verified promoted/advertising DOM elements outside the player.
- * Used for cosmetic filtering and ad-slot suppression.
- */
 export const PROMOTED_SELECTORS = [
   "ytd-ad-slot-renderer",
   "ytd-display-ad-renderer",
@@ -82,9 +82,6 @@ export const PROMOTED_SELECTORS = [
   "ytd-rich-section-renderer:has(ytd-ad-slot-renderer)"
 ] as const;
 
-/**
- * YouTube SPA lifecycle events.
- */
 export const NAVIGATION_EVENTS = [
   "yt-navigate-start",
   "yt-navigate-finish",
@@ -93,18 +90,12 @@ export const NAVIGATION_EVENTS = [
   "popstate"
 ] as const;
 
-/**
- * Selectors for anti-adblock warning / enforcement dialogs.
- */
 export const ANTI_ADBLOCK_DIALOG_SELECTORS = [
   "ytd-enforcement-message-view-model",
   "tp-yt-paper-dialog:has(#feedback.ytd-enforcement-message-view-model)",
   ".yt-playability-error-supported-renderers"
 ] as const;
 
-/**
- * Known anti-adblock text signatures.
- */
 export const ANTI_ADBLOCK_TEXT_PATTERNS = [
   /ad blockers violate youtube's terms of service/i,
   /ad blockers are not allowed on youtube/i,
@@ -116,16 +107,10 @@ export const ANTI_ADBLOCK_TEXT_PATTERNS = [
 
 export const COSMETIC_ATTRIBUTE_DISABLED = "ytclean-cosmetic-disabled";
 
-/**
- * Non-colliding global flags and event bridge names.
- */
 export const GLOBAL_INSTALL_KEY = Symbol.for("ytclean.installed");
 export const BRIDGE_EVENT_MAIN_TO_ISOLATED = "ytclean:main-event";
 export const BRIDGE_EVENT_ISOLATED_TO_MAIN = "ytclean:isolated-command";
 
-/**
- * Health monitor thresholds.
- */
 export const HEALTH_CONFIG = {
   maxErrorsInWindow: 3,
   windowDurationMs: 30_000,
