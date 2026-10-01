@@ -17,12 +17,21 @@ describe("PrerollShieldController", () => {
     document.body.innerHTML = "";
   });
 
-  it("pre-arms a watch navigation immediately", () => {
+  it("pre-arms a watch navigation immediately and seeds a requested-video poster", () => {
     const shield = new PrerollShieldController(document);
-    shield.preArmNavigation();
+    shield.preArmNavigation("abc123");
 
     expect(shield.isActive()).toBe(true);
     expect(document.documentElement.getAttribute("ytclean-preroll-pending")).toBe("true");
+    expect(
+      document.documentElement.style.getPropertyValue("--ytclean-preroll-poster")
+    ).toContain("i.ytimg.com/vi/abc123/hqdefault.jpg");
+
+    shield.clear("navigation");
+
+    expect(
+      document.documentElement.style.getPropertyValue("--ytclean-preroll-poster")
+    ).toBe("");
   });
 
   it("latches a confirmed preroll and ignores clean-response clearing", () => {
