@@ -52,7 +52,7 @@ import {
   // the first player paint. Arm immediately so neither an ad nor its end card
   // can flash before the player response is classified.
   if (window.location.pathname === "/watch") {
-    globalPrerollShield.arm();
+    globalPrerollShield.preArmNavigation();
   }
 
   const source = new MainWorldPlayerResponseSource(window, (event) => {
@@ -68,7 +68,7 @@ import {
   // selector is harmless on pages without #movie_player and guarantees that a
   // newly-created watch player begins covered rather than painting one ad frame.
   window.addEventListener("yt-navigate-start", () => {
-    globalPrerollShield.arm();
+    globalPrerollShield.preArmNavigation();
 
     // Abort pending alternate client races from the departing video.
     globalAlternatePlayer.abortAllPending();
