@@ -38,6 +38,16 @@ html:not([ytclean-cosmetic-disabled="true"]) .ytp-ad-text-overlay {
   display: none !important;
 }
 
+/*
+ * When the fallback intentionally allows a real preroll to initialize, hide the
+ * ad frames while the controller immediately seeks/skips them. The attribute is
+ * present only during a confirmed YouTube ad state and is removed on recovery.
+ */
+html:not([ytclean-cosmetic-disabled="true"]) #movie_player[ytclean-ad-active="true"] video.html5-main-video,
+html:not([ytclean-cosmetic-disabled="true"]) .html5-video-player[ytclean-ad-active="true"] video {
+  opacity: 0 !important;
+}
+
 /* Shorts ad slots and sponsored reels */
 html:not([ytclean-cosmetic-disabled="true"]) ytd-reel-video-renderer:has(ytd-ad-slot-renderer),
 html:not([ytclean-cosmetic-disabled="true"]) ytd-reel-video-renderer:has(ytd-reel-ad-header-renderer),
