@@ -1,17 +1,10 @@
 /**
  * Alternate Player Response Coordinator.
  *
- * Executes a bounded, parallelized race among healthy Innertube client profiles
- * to obtain a clean, compatible player response when the standard WEB response
- * is ad-bound.
- *
- * Key guarantees:
- * - Uses unpatched nativeFetch to eliminate recursion risk.
- * - Tags all internal calls with "X-YTClean-Internal".
- * - Bounded race (max 2-3 concurrent candidates).
- * - Enforces strict time budget (~800ms) with immediate AbortController cancellation.
- * - First valid, clean response wins; losing candidates aborted.
- * - SPA navigation cancels in-flight races.
+ * The production-critical detail here is that alternate player calls must retain
+ * the original Innertube request URL (including the API key) and the browser
+ * session headers/credentials. Rebuilding a naked POST to /youtubei/v1/player
+ * loses visitor/auth context and is unreliable on current YouTube.
  */
 
 import { PlayerClientPool, type PlayerClientProfile } from "./client-pool";
@@ -23,11 +16,35 @@ export interface AlternateSubstitutionResult {
   candidateId: string;
 }
 
+export interface PlayerRequestSnapshot {
+  url: string;
+  payload: Record<string, unknown>;
+  headers?: Array<[string, string]>;
+  credentials?: RequestCredentials;
+}
+
+const PRESERVED_CLIENT_KEYS = [
+  "hl",
+  "gl",
+  "timeZone",
+  "utcOffsetMinutes",
+  "visitorData",
+  "userInterfaceTheme"
+] as const;
+
+function isRequestSnapshot(
+  input: PlayerRequestSnapshot | Record<string, unknown>
+): input is PlayerRequestSnapshot {
+  return (
+    typeof (input as PlayerRequestSnapshot).url === "string" &&
+    !!(input as PlayerRequestSnapshot).payload
+  );
+}
+
 export class AlternatePlayerManager {
   private clientPool: PlayerClientPool;
   private nativeFetch: typeof window.fetch;
   private activeControllers: Set<AbortController> = new Set();
-  private readonly internalHeader = "X-YTClean-Internal";
 
   constructor(
     clientPool: PlayerClientPool = new PlayerClientPool(),
@@ -47,27 +64,10 @@ export class AlternatePlayerManager {
     return this.clientPool;
   }
 
-  /**
-   * Sets or updates the native fetch reference (captured before interceptor is installed).
-   */
   public setNativeFetch(fn: typeof window.fetch): void {
     this.nativeFetch = fn;
   }
 
-  public isInternalRequest(requestOrHeaders: unknown): boolean {
-    if (!requestOrHeaders) return false;
-    if (typeof requestOrHeaders === "object" && "headers" in (requestOrHeaders as any)) {
-      const headers = (requestOrHeaders as any).headers;
-      if (headers && typeof headers.get === "function") {
-        return headers.get(this.internalHeader) === "1";
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Aborts all pending candidate requests (e.g. upon SPA navigation).
-   */
   public abortAllPending(): void {
     for (const controller of this.activeControllers) {
       try {
@@ -80,81 +80,129 @@ export class AlternatePlayerManager {
   }
 
   /**
-   * Clones and customizes the original YouTube player request for a candidate profile.
+   * Build a client-specific payload without carrying WEB-only identity fields
+   * into a TV/mobile/embedded request. Session-safe fields such as visitorData,
+   * language and timezone are retained.
    */
   public buildCandidatePayload(
     originalPayload: Record<string, unknown>,
     candidate: PlayerClientProfile,
     videoId: string
   ): Record<string, unknown> {
-    const payload: Record<string, unknown> = JSON.parse(JSON.stringify(originalPayload));
+    const payload: Record<string, unknown> = JSON.parse(
+      JSON.stringify(originalPayload)
+    );
 
-    // Ensure context and client objects exist
     if (!payload.context || typeof payload.context !== "object") {
       payload.context = {};
     }
     const context = payload.context as Record<string, unknown>;
-    if (!context.client || typeof context.client !== "object") {
-      context.client = {};
-    }
-    const client = context.client as Record<string, unknown>;
+    const originalClient =
+      context.client && typeof context.client === "object"
+        ? (context.client as Record<string, unknown>)
+        : {};
 
-    // Inject candidate profile identity
+    const client: Record<string, unknown> = {};
+    for (const key of PRESERVED_CLIENT_KEYS) {
+      if (originalClient[key] !== undefined) {
+        client[key] = originalClient[key];
+      }
+    }
+
     client.clientName = candidate.clientName;
     client.clientVersion = candidate.clientVersion;
 
-    if (candidate.clientScreen) {
-      client.clientScreen = candidate.clientScreen;
+    if (candidate.userAgentOverride) {
+      client.userAgent = candidate.userAgentOverride;
     }
-    if (candidate.osName) {
-      client.osName = candidate.osName;
-    }
-    if (candidate.osVersion) {
-      client.osVersion = candidate.osVersion;
-    }
+    if (candidate.clientScreen) client.clientScreen = candidate.clientScreen;
+    if (candidate.osName) client.osName = candidate.osName;
+    if (candidate.osVersion) client.osVersion = candidate.osVersion;
     if (candidate.androidSdkVersion) {
       client.androidSdkVersion = candidate.androidSdkVersion;
     }
-    if (candidate.deviceModel) {
-      client.deviceModel = candidate.deviceModel;
+    if (candidate.deviceMake) client.deviceMake = candidate.deviceMake;
+    if (candidate.deviceModel) client.deviceModel = candidate.deviceModel;
+
+    context.client = client;
+
+    if (candidate.thirdPartyEmbedUrl) {
+      context.thirdParty = {
+        embedUrl: candidate.thirdPartyEmbedUrl
+      };
+    } else if (context.thirdParty) {
+      delete context.thirdParty;
     }
 
-    if (candidate.requiresOriginalUrl) {
-      client.originalUrl = `https://www.youtube.com/embed/${videoId}`;
-    }
-
-    // Preserve critical playback flags
     payload.videoId = videoId;
-    payload.contentCheckOk = true;
-    payload.racyCheckOk = true;
+
+    // Preserve caller flags when present; only add permissive flags when absent.
+    if (payload.contentCheckOk === undefined) payload.contentCheckOk = true;
+    if (payload.racyCheckOk === undefined) payload.racyCheckOk = true;
 
     return payload;
   }
 
-  /**
-   * Executes candidate race to find a valid clean player response.
-   */
+  private normalizeSnapshot(
+    input: PlayerRequestSnapshot | Record<string, unknown>
+  ): PlayerRequestSnapshot {
+    if (isRequestSnapshot(input)) {
+      return input;
+    }
+    return {
+      url: "/youtubei/v1/player?prettyPrint=false",
+      payload: input,
+      headers: [["content-type", "application/json"]],
+      credentials: "same-origin"
+    };
+  }
+
+  private buildCandidateHeaders(
+    snapshot: PlayerRequestSnapshot,
+    candidate: PlayerClientProfile
+  ): Headers {
+    const headers = new Headers(snapshot.headers ?? []);
+
+    // Browser recalculates these; carrying stale transport headers is unsafe.
+    headers.delete("content-length");
+
+    headers.set("content-type", "application/json");
+
+    // Keep the request header identity consistent with the context.client body.
+    headers.delete("x-youtube-client-name");
+    headers.delete("x-youtube-client-version");
+    if (candidate.clientNameId !== undefined) {
+      headers.set("x-youtube-client-name", String(candidate.clientNameId));
+    }
+    headers.set("x-youtube-client-version", candidate.clientVersion);
+
+    return headers;
+  }
+
   public async fetchCleanAlternateResponse(
-    originalPayload: unknown,
+    originalRequest: PlayerRequestSnapshot | Record<string, unknown>,
     expectedVideoId: string,
-    timeBudgetMs = 800
+    timeBudgetMs = 1200
   ): Promise<AlternateSubstitutionResult | null> {
-    if (!originalPayload || typeof originalPayload !== "object" || !expectedVideoId) {
+    if (!originalRequest || typeof originalRequest !== "object" || !expectedVideoId) {
+      return null;
+    }
+
+    const snapshot = this.normalizeSnapshot(originalRequest);
+    if (
+      !snapshot.payload ||
+      typeof snapshot.payload !== "object" ||
+      Array.isArray(snapshot.payload)
+    ) {
       return null;
     }
 
     const candidates = this.clientPool.getCandidates().slice(0, 3);
-    if (candidates.length === 0) {
-      return null;
-    }
+    if (candidates.length === 0) return null;
 
     const raceController = new AbortController();
     this.activeControllers.add(raceController);
 
-    const raceStartTime = Date.now();
-    const candidateControllers: AbortController[] = [];
-
-    // Timeout guard: if time budget elapses before a winner emerges, cancel race
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     const timeoutPromise = new Promise<null>((resolve) => {
       timeoutTimer = setTimeout(() => {
@@ -175,35 +223,31 @@ export class AlternatePlayerManager {
     const executeCandidate = async (
       candidate: PlayerClientProfile
     ): Promise<AlternateSubstitutionResult> => {
-      const candidateController = new AbortController();
-      candidateControllers.push(candidateController);
-
-      // Link raceController abort to candidateController
-      const onRaceAbort = () => candidateController.abort();
+      const controller = new AbortController();
+      const onRaceAbort = () => controller.abort();
       raceController.signal.addEventListener("abort", onRaceAbort, { once: true });
 
-      const candidateStartTime = Date.now();
+      const startedAt = Date.now();
       this.clientPool.markAttempt(candidate.id);
 
       try {
         const payload = this.buildCandidatePayload(
-          originalPayload as Record<string, unknown>,
+          snapshot.payload,
           candidate,
           expectedVideoId
         );
+        const headers = this.buildCandidateHeaders(snapshot, candidate);
 
-        const response = await this.nativeFetch("/youtubei/v1/player?prettyPrint=false", {
+        const response = await this.nativeFetch(snapshot.url, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            [this.internalHeader]: "1"
-          },
+          headers,
           body: JSON.stringify(payload),
-          signal: candidateController.signal
+          credentials: snapshot.credentials ?? "same-origin",
+          signal: controller.signal
         });
 
         if (!response.ok) {
-          const duration = Date.now() - candidateStartTime;
+          const duration = Date.now() - startedAt;
           this.clientPool.markFailure(candidate.id, `HTTP_${response.status}`);
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
@@ -216,10 +260,9 @@ export class AlternatePlayerManager {
         }
 
         const data = await response.json();
-        const duration = Date.now() - candidateStartTime;
+        const duration = Date.now() - startedAt;
 
-        const isValid = validateAlternatePlayerResponse(data, expectedVideoId);
-        if (!isValid) {
+        if (!validateAlternatePlayerResponse(data, expectedVideoId)) {
           this.clientPool.markFailure(candidate.id, "INVALID_RESPONSE");
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
@@ -230,7 +273,6 @@ export class AlternatePlayerManager {
           throw new Error("Validation failed");
         }
 
-        // Candidate succeeded!
         this.clientPool.markSuccess(candidate.id, duration);
         globalPlaybackTiming.recordCandidateResult({
           candidateId: candidate.id,
@@ -244,8 +286,8 @@ export class AlternatePlayerManager {
           candidateId: candidate.id
         };
       } catch (err) {
-        const duration = Date.now() - candidateStartTime;
-        if (candidateController.signal.aborted) {
+        const duration = Date.now() - startedAt;
+        if (controller.signal.aborted) {
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
             clientName: candidate.clientName,
@@ -260,26 +302,24 @@ export class AlternatePlayerManager {
     };
 
     try {
-      // Promise.any takes the first resolved valid result
       const winner = await Promise.race([
-        Promise.any(candidates.map((c) => executeCandidate(c))),
+        Promise.any(candidates.map((candidate) => executeCandidate(candidate))),
         timeoutPromise
       ]);
 
       if (winner) {
-        // Abort remaining candidates immediately
         raceController.abort();
-        globalPlaybackTiming.setSelectedCandidate(winner.candidateId, expectedVideoId);
+        globalPlaybackTiming.setSelectedCandidate(
+          winner.candidateId,
+          expectedVideoId
+        );
         return winner;
       }
       return null;
     } catch {
-      // All candidates failed
       return null;
     } finally {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-      }
+      if (timeoutTimer) clearTimeout(timeoutTimer);
       this.activeControllers.delete(raceController);
     }
   }
