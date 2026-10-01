@@ -138,7 +138,7 @@ export class PlayerController {
     return false;
   }
 
-  public restoreUserState(): void {
+  public restoreUserState(emitContentResumed = true): void {
     const saved = this.savedUserState;
     this.playerElement.removeAttribute("ytclean-ad-active");
 
@@ -156,7 +156,9 @@ export class PlayerController {
     }
 
     this.savedUserState = null;
-    this.onEvent?.({ type: "CONTENT_RESUMED" });
+    if (emitContentResumed) {
+      this.onEvent?.({ type: "CONTENT_RESUMED" });
+    }
   }
 
   public getSavedUserState(): UserPlaybackState | null {

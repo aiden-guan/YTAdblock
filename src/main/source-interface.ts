@@ -3,6 +3,7 @@ import { installFetchInterceptor } from "./fetch-interceptor";
 import { installInitialPlayerResponseHook } from "./initial-response";
 import { installXhrInterceptor } from "./xhr-interceptor";
 import { BRIDGE_EVENT_MAIN_TO_ISOLATED } from "../config/youtube";
+import { globalPrerollShield } from "./preroll-shield";
 
 export type EventDispatcher = (event: BlockerEvent) => void;
 
@@ -26,6 +27,10 @@ export class MainWorldPlayerResponseSource implements PlayerResponseSource {
     this.isRunning = true;
 
     const dispatch = (event: BlockerEvent) => {
+      // Visual protection must happen synchronously in MAIN world before the
+      // cross-world event handoff. This avoids document_start listener races.
+      globalPrerollShield.handleEvent(event);
+
       this.onEvent?.(event);
       try {
         // Dispatch custom event across boundary to isolated world content script
