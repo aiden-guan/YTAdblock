@@ -105,6 +105,8 @@ describe("mergeCleanPlaybackData", () => {
 
     const alternate = JSON.parse(JSON.stringify(cleanFixture));
     alternate.streamingData.formats[0].itag = 999; // Distinct marker
+    alternate.streamingData.serverAbrStreamingUrl =
+      "https://r2---sn-test.googlevideo.com/videoplayback?sabr=1";
 
     const merged = mergeCleanPlaybackData(original, alternate) as Record<string, unknown>;
 
@@ -119,8 +121,10 @@ describe("mergeCleanPlaybackData", () => {
     expect(merged.captions).toEqual(original.captions);
     expect(merged.videoDetails).toEqual(original.videoDetails);
 
-    // Clean streaming data substituted
+    // Clean streaming data substituted. The unvalidated SABR transport is
+    // deliberately removed so the WEB player uses the preflighted transport.
     expect((merged.streamingData as any).formats[0].itag).toBe(999);
+    expect((merged.streamingData as any).serverAbrStreamingUrl).toBeUndefined();
 
     // Original object immutable
     expect(original.adPlacements).toBeDefined();
