@@ -21,8 +21,44 @@ import { CosmeticController } from "./cosmetic-controller";
   win[guardKey] = true;
 
   let currentSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
+  const PREROLL_SHIELD_ATTRIBUTE = "ytclean-preroll-pending";
+  let prerollShieldWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   const diagnostics = new DiagnosticsManager(currentSettings);
+
+  function clearPrerollShieldWatchdog() {
+    if (prerollShieldWatchdog !== null) {
+      clearTimeout(prerollShieldWatchdog);
+      prerollShieldWatchdog = null;
+    }
+  }
+
+  function setPrerollShield(active: boolean): void {
+    const root = document.documentElement;
+    if (!root) return;
+
+    if (!active) {
+      root.removeAttribute(PREROLL_SHIELD_ATTRIBUTE);
+      clearPrerollShieldWatchdog();
+      return;
+    }
+
+    if (!currentSettings.protectionEnabled) return;
+
+    root.setAttribute(PREROLL_SHIELD_ATTRIBUTE, "true");
+    clearPrerollShieldWatchdog();
+
+    // Fail open instead of ever leaving a permanent black player if YouTube
+    // changes its lifecycle and the normal clear signal never arrives.
+    prerollShieldWatchdog = setTimeout(() => {
+      root.removeAttribute(PREROLL_SHIELD_ATTRIBUTE);
+      prerollShieldWatchdog = null;
+      diagnostics.recordEvent({
+        type: "PREROLL_CLEARED",
+        reason: "watchdog"
+      });
+    }, 12_000);
+  }
 
   const cosmeticController = new CosmeticController(document, (event) => {
     handleIncomingEvent(event);
@@ -50,6 +86,7 @@ import { CosmeticController } from "./cosmetic-controller";
     30_000,
     (reason) => {
       // Degraded health: disable main-world rewriting to fail open and avoid breaking YouTube
+      setPrerollShield(false);
       sendMainWorldCommand("PAUSE_SANITIZER");
       diagnostics.recordEvent({
         type: "HEALTH_DEGRADED",
@@ -73,6 +110,7 @@ import { CosmeticController } from "./cosmetic-controller";
     if (settings.protectionEnabled) {
       sendMainWorldCommand("RESUME_SANITIZER");
     } else {
+      setPrerollShield(false);
       sendMainWorldCommand("PAUSE_SANITIZER");
     }
     cosmeticController.setEnabled(
@@ -81,8 +119,22 @@ import { CosmeticController } from "./cosmetic-controller";
   }
 
   function handleIncomingEvent(event: BlockerEvent) {
+    // Shield changes happen before diagnostics so the visual response is as close
+    // as possible to the player-response event that triggered them.
+    if (
+      event.type === "PREROLL_CLEARED" ||
+      event.type === "PLAYER_RESPONSE_SUBSTITUTED" ||
+      event.type === "CONTENT_RESUMED"
+    ) {
+      setPrerollShield(false);
+    }
+
     if (!currentSettings.protectionEnabled) {
       return;
+    }
+
+    if (event.type === "PREROLL_DETECTED" || event.type === "AD_CONFIRMED") {
+      setPrerollShield(true);
     }
 
     if (event.type === "ERROR") {
@@ -105,6 +157,17 @@ import { CosmeticController } from "./cosmetic-controller";
       handleIncomingEvent(e.detail as BlockerEvent);
     }
   }) as EventListener);
+
+  // Clear any prior-video shield immediately at SPA navigation start. If the
+  // incoming video has a preroll, its player response will set it again before
+  // the ad is painted.
+  window.addEventListener("yt-navigate-start", () => {
+    setPrerollShield(false);
+  });
+
+  window.addEventListener("beforeunload", () => {
+    setPrerollShield(false);
+  });
 
   // 3. Listen for messages from extension popup or background
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
