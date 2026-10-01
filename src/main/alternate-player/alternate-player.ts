@@ -203,10 +203,20 @@ export class AlternatePlayerManager {
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
     const timeoutPromise = new Promise<null>((resolve) => {
+      const finish = () => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+        resolve(null);
+      };
+
       timeoutTimer = setTimeout(() => {
         raceController.abort();
-        resolve(null);
+        finish();
       }, timeBudgetMs);
+
+      raceController.signal.addEventListener("abort", finish, { once: true });
     });
 
     const executeCandidate = async (
