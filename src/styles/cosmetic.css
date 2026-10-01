@@ -19,6 +19,8 @@
  */
 html[ytclean-preroll-pending="true"] #movie_player {
   position: relative !important;
+  isolation: isolate !important;
+  overflow: hidden !important;
   background: #000 !important;
 }
 
