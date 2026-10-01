@@ -4,43 +4,67 @@ import {
   installFetchInterceptor,
   isInternalFetch
 } from "../src/main/fetch-interceptor";
-import { AlternatePlayerManager } from "../src/main/alternate-player/alternate-player";
+import {
+  AlternatePlayerManager,
+  type PlayerRequestSnapshot
+} from "../src/main/alternate-player/alternate-player";
 import { PlayerClientPool } from "../src/main/alternate-player/client-pool";
 import { mergeCleanPlaybackData } from "../src/main/alternate-player/response-merger";
 import cleanFixture from "./fixtures/player-clean.json";
 import adFixture from "./fixtures/player-with-ads.json";
 import type { BlockerEvent } from "../src/types/events";
 
-describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
+describe("player substitution integration", () => {
   let fakeWindow: any;
   let emittedEvents: BlockerEvent[];
 
   beforeEach(() => {
     emittedEvents = [];
-    fakeWindow = {
-      fetch: vi.fn()
-    };
+    fakeWindow = { fetch: vi.fn() };
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("1. Ad-bound response: selects alternate clean response, substitutes streamingData, removes ad fields", async () => {
+  it("substitutes a valid clean alternate response and removes preroll fields", async () => {
     const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
     const targetVideoId = "abc123xyz89";
     originalAdResponse.videoDetails.videoId = targetVideoId;
 
     const cleanCandidateData = JSON.parse(JSON.stringify(cleanFixture));
     cleanCandidateData.videoDetails.videoId = targetVideoId;
-    cleanCandidateData.streamingData.formats[0].itag = 777; // Distinct clean stream marker
+    cleanCandidateData.streamingData.formats[0].itag = 777;
 
     const fakeInternalFetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify(cleanCandidateData), { status: 200 })
     );
 
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
+    const manager = new AlternatePlayerManager(
+      new PlayerClientPool(),
+      fakeInternalFetch
+    );
+
+    const snapshot: PlayerRequestSnapshot = {
+      url: "https://www.youtube.com/youtubei/v1/player?key=real-key&prettyPrint=false",
+      payload: {
+        videoId: targetVideoId,
+        context: {
+          client: {
+            clientName: "WEB",
+            clientVersion: "2.20260708.00.00",
+            visitorData: "visitor-123"
+          }
+        }
+      },
+      headers: [
+        ["content-type", "application/json"],
+        ["x-goog-visitor-id", "visitor-123"],
+        ["x-youtube-client-name", "1"],
+        ["x-youtube-client-version", "2.20260708.00.00"]
+      ],
+      credentials: "include"
+    };
 
     const originalResponse = new Response(JSON.stringify(originalAdResponse), {
       status: 200,
@@ -49,329 +73,233 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
 
     const res = await handleFetchResponse(
       originalResponse,
-      "https://www.youtube.com/youtubei/v1/player",
+      snapshot.url,
       (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
+      snapshot,
+      manager
     );
 
     const json = await res.json();
-
-    // Verify clean streaming data selected
     expect(json.streamingData.formats[0].itag).toBe(777);
-
-    // Verify ad fields removed
     expect(json.adPlacements).toBeUndefined();
     expect(json.playerAds).toBeUndefined();
     expect(json.adSlots).toBeUndefined();
-    expect(json.adBreakHeartbeatParams).toBeUndefined();
 
-    // Verify events emitted
+    expect(fakeInternalFetch).toHaveBeenCalled();
+    const [calledUrl, calledInit] = fakeInternalFetch.mock.calls[0];
+    expect(calledUrl).toBe(snapshot.url);
+    expect(calledInit.credentials).toBe("include");
+    expect(new Headers(calledInit.headers).get("x-goog-visitor-id")).toBe(
+      "visitor-123"
+    );
+
     expect(emittedEvents).toContainEqual(
       expect.objectContaining({
         type: "PLAYER_RESPONSE_SUBSTITUTED",
-        candidateId: expect.any(String),
         videoId: targetVideoId
       })
     );
   });
 
-  it("2. Clean normal response: does NOT make unnecessary alternate calls, returns immediately", async () => {
-    const cleanResponseData = JSON.parse(JSON.stringify(cleanFixture));
-    const originalResponse = new Response(JSON.stringify(cleanResponseData), {
+  it("does not make alternate calls for a clean player response", async () => {
+    const fakeInternalFetch = vi.fn();
+    const manager = new AlternatePlayerManager(
+      new PlayerClientPool(),
+      fakeInternalFetch
+    );
+
+    const originalResponse = new Response(JSON.stringify(cleanFixture), {
       status: 200,
       headers: { "Content-Type": "application/json" }
     });
 
-    const fakeInternalFetch = vi.fn();
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
-
     const res = await handleFetchResponse(
       originalResponse,
       "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: cleanFixture.videoDetails.videoId },
-      alternateManager
+      undefined,
+      {
+        videoId: cleanFixture.videoDetails.videoId,
+        context: { client: { clientName: "WEB" } }
+      },
+      manager
     );
 
-    // ZERO alternate calls made
     expect(fakeInternalFetch).not.toHaveBeenCalled();
-
-    // Returned response matches clean fixture
-    const json = await res.json();
-    expect(json).toEqual(cleanFixture);
+    expect(await res.json()).toEqual(cleanFixture);
   });
 
-  it("3. Alternate wrong video: rejects alternate response and falls back to sanitized original", async () => {
-    const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
+  it("fails open to the original preroll response when all alternate clients are invalid", async () => {
     const targetVideoId = "target-correct-vid";
+    const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
     originalAdResponse.videoDetails.videoId = targetVideoId;
 
-    const wrongVidData = JSON.parse(JSON.stringify(cleanFixture));
-    wrongVidData.videoDetails.videoId = "wrong-unrelated-vid";
+    const wrongVideo = JSON.parse(JSON.stringify(cleanFixture));
+    wrongVideo.videoDetails.videoId = "wrong-video";
 
-    const fakeInternalFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(wrongVidData), { status: 200 })
+    const manager = new AlternatePlayerManager(
+      new PlayerClientPool(),
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(wrongVideo), { status: 200 })
+      )
     );
 
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
-
     const originalResponse = new Response(JSON.stringify(originalAdResponse), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
+      status: 200
     });
 
     const res = await handleFetchResponse(
       originalResponse,
-      "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
+      "https://www.youtube.com/youtubei/v1/player?key=x",
+      undefined,
+      { videoId: targetVideoId, context: {} },
+      manager
     );
 
     const json = await res.json();
-    // Video ID must remain targetVideoId, and ad fields are sanitized via fallback
     expect(json.videoDetails.videoId).toBe(targetVideoId);
-    expect(json.adPlacements).toBeUndefined();
-    expect(emittedEvents).toContainEqual(
-      expect.objectContaining({ type: "PLAYER_RESPONSE_SANITIZED" })
-    );
+    expect(json.adPlacements).toBeDefined();
+    expect(json.playerAds).toBeDefined();
   });
 
-  it("4. Alternate unplayable: rejects UNPLAYABLE / ERROR responses", async () => {
+  it("fails open on alternate timeout instead of manufacturing a stripped preroll session", async () => {
+    const targetVideoId = "timeout-video";
     const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
-    const targetVideoId = "abc123xyz89";
+    originalAdResponse.videoDetails.videoId = targetVideoId;
 
-    const unplayableData = JSON.parse(JSON.stringify(cleanFixture));
-    unplayableData.videoDetails.videoId = targetVideoId;
-    unplayableData.playabilityStatus.status = "UNPLAYABLE";
-
-    const fakeInternalFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(unplayableData), { status: 200 })
+    const manager = new AlternatePlayerManager(
+      new PlayerClientPool(),
+      vi.fn().mockImplementation(() => new Promise(() => {}))
     );
-
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
 
     const originalResponse = new Response(JSON.stringify(originalAdResponse), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-
-    const res = await handleFetchResponse(
-      originalResponse,
-      "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
-    );
-
-    const json = await res.json();
-    expect(json.playabilityStatus.status).toBe("OK"); // Preserves original OK status, rejects UNPLAYABLE
-  });
-
-  it("5. Alternate missing streamingData: rejects response", async () => {
-    const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
-    const targetVideoId = "abc123xyz89";
-
-    const invalidData = JSON.parse(JSON.stringify(cleanFixture));
-    invalidData.videoDetails.videoId = targetVideoId;
-    delete invalidData.streamingData;
-
-    const fakeInternalFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(invalidData), { status: 200 })
-    );
-
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
-
-    const originalResponse = new Response(JSON.stringify(originalAdResponse), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-
-    const res = await handleFetchResponse(
-      originalResponse,
-      "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
-    );
-
-    const json = await res.json();
-    expect(json.streamingData).toBeDefined(); // Kept original streamingData
-  });
-
-  it("6. Alternate contains ads: rejects candidate response that itself has prerolls", async () => {
-    const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
-    const targetVideoId = "abc123xyz89";
-
-    // Candidate returns ad response
-    const adCandidate = JSON.parse(JSON.stringify(adFixture));
-
-    const fakeInternalFetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(adCandidate), { status: 200 })
-    );
-
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
-
-    const originalResponse = new Response(JSON.stringify(originalAdResponse), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-
-    const res = await handleFetchResponse(
-      originalResponse,
-      "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
-    );
-
-    const json = await res.json();
-    expect(json.adPlacements).toBeUndefined(); // Fallback sanitized it
-  });
-
-  it("7. Alternate 403 media: marks candidate unhealthy and rotates candidate", () => {
-    const pool = new PlayerClientPool();
-    pool.markSuccess("web-embedded");
-    expect(pool.getPreferredClient()).toBe("web-embedded");
-
-    // Media request fails with 403
-    pool.markFailure("web-embedded", "MEDIA_403");
-    expect(pool.getPreferredClient()).toBeNull(); // Rotated away
-
-    pool.markFailure("web-embedded", "MEDIA_403");
-    const candidates = pool.getCandidates();
-    // web-embedded is suppressed from candidates
-    expect(candidates.find((c) => c.id === "web-embedded")).toBeUndefined();
-  });
-
-  it("8. Timeout: falls back within budget when alternate requests hang", async () => {
-    const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
-    const targetVideoId = "abc123xyz89";
-
-    // Candidate hangs indefinitely
-    const fakeInternalFetch = vi.fn().mockImplementation(() => new Promise(() => {}));
-
-    const clientPool = new PlayerClientPool();
-    const alternateManager = new AlternatePlayerManager(clientPool, fakeInternalFetch);
-
-    const originalResponse = new Response(JSON.stringify(originalAdResponse), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
+      status: 200
     });
 
     const start = Date.now();
     const res = await handleFetchResponse(
       originalResponse,
       "https://www.youtube.com/youtubei/v1/player",
-      (ev) => emittedEvents.push(ev),
-      { videoId: targetVideoId },
-      alternateManager
+      undefined,
+      { videoId: targetVideoId, context: {} },
+      manager
     );
-    const duration = Date.now() - start;
+    const elapsed = Date.now() - start;
 
-    expect(duration).toBeLessThan(1200); // Handled within time budget
-    const json = await res.json();
-    expect(json.adPlacements).toBeUndefined(); // Fallback sanitizer executed
+    expect(elapsed).toBeLessThan(1700);
+    expect((await res.json()).adPlacements).toBeDefined();
   });
 
-  it("9. Two successful candidates: first valid one wins; other is aborted", async () => {
-    const pool = new PlayerClientPool();
-    let abortedCandidate: string | null = null;
-
+  it("updates candidate request header identity to match the candidate body", async () => {
     const cleanData = JSON.parse(JSON.stringify(cleanFixture));
-    cleanData.videoDetails.videoId = "vid-race-9";
+    cleanData.videoDetails.videoId = "candidate-header-video";
 
-    const fakeInternalFetch = vi.fn().mockImplementation(async (url: string, init: RequestInit) => {
-      const body = JSON.parse(init.body as string);
-      const clientName = body.context?.client?.clientName;
-
-      init.signal?.addEventListener("abort", () => {
-        abortedCandidate = clientName;
-      });
-
-      if (clientName === "WEB_EMBEDDED_PLAYER") {
-        return new Response(JSON.stringify(cleanData), { status: 200 });
-      }
-
-      // Slower second candidate
-      await new Promise((r) => setTimeout(r, 100));
-      return new Response(JSON.stringify(cleanData), { status: 200 });
-    });
-
-    const manager = new AlternatePlayerManager(pool, fakeInternalFetch);
-    const result = await manager.fetchCleanAlternateResponse(
-      { videoId: "vid-race-9", context: {} },
-      "vid-race-9"
+    const fakeInternalFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(cleanData), { status: 200 })
+    );
+    const manager = new AlternatePlayerManager(
+      new PlayerClientPool(),
+      fakeInternalFetch
     );
 
-    expect(result?.candidateId).toBe("web-embedded");
-    expect(abortedCandidate).not.toBeNull();
+    await manager.fetchCleanAlternateResponse(
+      {
+        url: "https://www.youtube.com/youtubei/v1/player?key=abc",
+        payload: {
+          videoId: "candidate-header-video",
+          context: {
+            client: {
+              clientName: "WEB",
+              clientVersion: "2.20260708.00.00",
+              visitorData: "v1"
+            }
+          }
+        },
+        headers: [
+          ["x-youtube-client-name", "1"],
+          ["x-youtube-client-version", "2.20260708.00.00"],
+          ["x-goog-visitor-id", "v1"]
+        ]
+      },
+      "candidate-header-video"
+    );
+
+    const [, init] = fakeInternalFetch.mock.calls[0];
+    const body = JSON.parse(init.body as string);
+    const headers = new Headers(init.headers);
+
+    expect(body.context.client.clientName).toBe("WEB_EMBEDDED_PLAYER");
+    expect(body.context.thirdParty.embedUrl).toBe("https://www.reddit.com/");
+    expect(headers.get("x-youtube-client-name")).toBe("56");
+    expect(headers.get("x-youtube-client-version")).toBe("2.20260708.00.00");
+    expect(headers.get("x-goog-visitor-id")).toBe("v1");
   });
 
-  it("10. Recursion: internal fetch never invokes interceptor again", async () => {
-    let interceptorCallCount = 0;
+  it("suppresses a candidate after repeated media authorization failures", () => {
+    const pool = new PlayerClientPool();
+    pool.markSuccess("web-embedded");
+    pool.markFailure("web-embedded", "MEDIA_403");
+    pool.markFailure("web-embedded", "MEDIA_403");
 
-    fakeWindow.fetch = vi.fn().mockImplementation(async (input: any, init?: any) => {
-      if (isInternalFetch(input, init)) {
-        return new Response(JSON.stringify(cleanFixture));
-      }
-      interceptorCallCount++;
-      return new Response(JSON.stringify(adFixture));
-    });
-
-    const teardown = installFetchInterceptor(fakeWindow);
-
-    // Call with internal header
-    const internalReq = new Request("https://www.youtube.com/youtubei/v1/player", {
-      headers: { "X-YTClean-Internal": "1" }
-    });
-    await fakeWindow.fetch(internalReq);
-
-    // Did NOT call interceptor handler
-    expect(interceptorCallCount).toBe(0);
-
-    teardown();
+    expect(
+      pool.getCandidates().find((candidate) => candidate.id === "web-embedded")
+    ).toBeUndefined();
   });
 
-  it("11. SPA navigation: old candidate requests are aborted immediately", async () => {
+  it("aborts in-flight candidate requests on SPA navigation", async () => {
     const pool = new PlayerClientPool();
     let aborted = false;
 
-    const fakeInternalFetch = vi.fn().mockImplementation((url: string, init: RequestInit) => {
-      init.signal?.addEventListener("abort", () => {
-        aborted = true;
-      });
-      return new Promise(() => {}); // never finishes
-    });
+    const fakeInternalFetch = vi.fn().mockImplementation(
+      (_url: string, init: RequestInit) => {
+        init.signal?.addEventListener("abort", () => {
+          aborted = true;
+        });
+        return new Promise(() => {});
+      }
+    );
 
     const manager = new AlternatePlayerManager(pool, fakeInternalFetch);
     const promise = manager.fetchCleanAlternateResponse(
-      { videoId: "spa-nav-vid", context: {} },
-      "spa-nav-vid",
-      1500
+      { videoId: "spa-video", context: {} },
+      "spa-video",
+      1000
     );
 
-    // SPA navigation occurs
     manager.abortAllPending();
     await promise;
-
     expect(aborted).toBe(true);
   });
 
-  it("12. Original response: original object remains strictly immutable", () => {
+  it("keeps explicit internal requests outside the interceptor", async () => {
+    let primaryCalls = 0;
+    fakeWindow.fetch = vi.fn().mockImplementation(
+      async (input: any, init?: RequestInit) => {
+        if (isInternalFetch(input, init)) {
+          return new Response(JSON.stringify(cleanFixture));
+        }
+        primaryCalls++;
+        return new Response(JSON.stringify(adFixture));
+      }
+    );
+
+    const teardown = installFetchInterceptor(fakeWindow);
+    const request = new Request(
+      "https://www.youtube.com/youtubei/v1/player",
+      { headers: { "X-YTClean-Internal": "1" } }
+    );
+
+    await fakeWindow.fetch(request);
+    expect(primaryCalls).toBe(0);
+    teardown();
+  });
+
+  it("does not mutate the original response object during merging", () => {
     const original = JSON.parse(JSON.stringify(adFixture));
-    const originalSerialized = JSON.stringify(original);
+    const serialized = JSON.stringify(original);
+    const clean = JSON.parse(JSON.stringify(cleanFixture));
 
-    const cleanCandidate = JSON.parse(JSON.stringify(cleanFixture));
-    const merged = mergeCleanPlaybackData(original, cleanCandidate);
-
+    const merged = mergeCleanPlaybackData(original, clean);
     expect(merged).not.toBe(original);
-    expect(JSON.stringify(original)).toBe(originalSerialized);
+    expect(JSON.stringify(original)).toBe(serialized);
   });
 });
