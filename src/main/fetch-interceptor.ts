@@ -4,16 +4,14 @@ import { detectPrerollInfo } from "./preroll-detector";
 import { globalPlaybackTiming } from "./playback-timing";
 import {
   globalAlternatePlayer,
-  AlternatePlayerManager
+  AlternatePlayerManager,
+  type OriginalPlayerRequestContext
 } from "./alternate-player/alternate-player";
 import { mergeCleanPlaybackData } from "./alternate-player/response-merger";
 import type { BlockerEvent } from "../types/events";
 
 export type EventCallback = (event: BlockerEvent) => void;
 
-/**
- * Determines whether a URL points to a targeted YouTube player endpoint.
- */
 export function isPlayerEndpoint(urlStr: string): boolean {
   try {
     const url = new URL(urlStr, "https://www.youtube.com");
@@ -23,36 +21,22 @@ export function isPlayerEndpoint(urlStr: string): boolean {
   }
 }
 
-/**
- * Determines whether a URL points to a GoogleVideo / YouTube media playback stream.
- */
 export function isMediaEndpoint(urlStr: string): boolean {
   return urlStr.includes("/videoplayback") || urlStr.includes("googlevideo.com");
 }
 
 /**
- * Checks whether this fetch request was initiated internally by ytclean.
+ * Retained for compatibility/tests. Internal alternate requests use the captured
+ * native fetch directly, so no marker header is required in production.
  */
 export function isInternalFetch(input: RequestInfo | URL, init?: RequestInit): boolean {
-  if (init?.headers) {
-    if (typeof (init.headers as any).get === "function") {
-      if ((init.headers as any).get("X-YTClean-Internal") === "1") return true;
-    } else if (typeof init.headers === "object") {
-      if ((init.headers as any)["X-YTClean-Internal"] === "1") return true;
-    }
-  }
-  if (input && typeof input === "object" && "headers" in input) {
-    const req = input as Request;
-    if (req.headers && typeof req.headers.get === "function") {
-      if (req.headers.get("X-YTClean-Internal") === "1") return true;
-    }
-  }
-  return false;
+  const headers = new Headers(
+    init?.headers ||
+      (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined)
+  );
+  return headers.get("X-YTClean-Internal") === "1";
 }
 
-/**
- * Extracts a URL string from fetch parameters (string, URL, or Request).
- */
 export function extractUrlFromFetchInput(input: RequestInfo | URL): string {
   if (typeof input === "string") return input;
   if (input instanceof URL) return input.href;
@@ -62,67 +46,65 @@ export function extractUrlFromFetchInput(input: RequestInfo | URL): string {
   return String(input);
 }
 
-/**
- * Extracts payload object from fetch arguments or parsed player response.
- */
 export function extractPayloadFromInitOrData(
   init?: RequestInit,
-  input?: RequestInfo | URL,
+  _input?: RequestInfo | URL,
   data?: any
 ): Record<string, unknown> | null {
   if (init?.body && typeof init.body === "string") {
     try {
       return JSON.parse(init.body);
     } catch {
-      // Ignore parse error
+      // Ignore malformed request bodies.
     }
   }
+
   if (data?.videoDetails?.videoId) {
     return {
       videoId: data.videoDetails.videoId,
-      context: { client: { clientName: "WEB", clientVersion: "2.20240901.01.00" } }
+      context: {
+        client: {
+          clientName: "WEB"
+        }
+      }
     };
   }
+
   return null;
 }
 
-/**
- * Extracts target videoId from URL query, request body, or response data.
- */
 export function extractVideoId(
   urlStr: string,
   init?: RequestInit,
   data?: any
 ): string | undefined {
-  if (data?.videoDetails?.videoId) {
-    return data.videoDetails.videoId;
-  }
+  if (data?.videoDetails?.videoId) return data.videoDetails.videoId;
+
   try {
     const url = new URL(urlStr, "https://www.youtube.com");
-    const vParam = url.searchParams.get("v") || url.searchParams.get("videoId");
-    if (vParam) return vParam;
-  } catch {}
+    const fromUrl = url.searchParams.get("v") || url.searchParams.get("videoId");
+    if (fromUrl) return fromUrl;
+  } catch {
+    // Ignore malformed URL.
+  }
+
   if (init?.body && typeof init.body === "string") {
     try {
       const parsed = JSON.parse(init.body);
       if (parsed.videoId) return parsed.videoId;
-    } catch {}
+    } catch {
+      // Ignore malformed body.
+    }
   }
+
   return undefined;
 }
 
-/**
- * Constructs a transparent replacement Response that preserves original
- * Response metadata (url, redirected, status, statusText, headers, type)
- * while serving the sanitized JSON content.
- */
 export function createSanitizedResponse(
   originalResponse: Response,
   sanitizedJson: unknown
 ): Response {
   const jsonString = JSON.stringify(sanitizedJson);
-
-  // Copy and adjust headers
   const newHeaders = new Headers(originalResponse.headers);
   newHeaders.delete("content-length");
   newHeaders.set("content-type", "application/json; charset=utf-8");
@@ -133,111 +115,123 @@ export function createSanitizedResponse(
     headers: newHeaders
   });
 
-  // Proxy to preserve read-only attributes like url, redirected, type
   return new Proxy(replacement, {
     get(target, prop) {
-      if (prop === "url") {
-        return originalResponse.url || target.url;
-      }
-      if (prop === "redirected") {
-        return originalResponse.redirected ?? target.redirected;
-      }
-      if (prop === "type") {
-        return originalResponse.type || target.type;
-      }
+      if (prop === "url") return originalResponse.url || target.url;
+      if (prop === "redirected") return originalResponse.redirected ?? target.redirected;
+      if (prop === "type") return originalResponse.type || target.type;
       if (prop === "clone") {
         return () => {
-          if (target.bodyUsed) {
-            return target.clone(); // Native TypeError when body is already used
-          }
+          if (target.bodyUsed) return target.clone();
           return createSanitizedResponse(originalResponse, sanitizedJson);
         };
       }
 
       const value = Reflect.get(target, prop, target);
-      if (typeof value === "function") {
-        return value.bind(target);
-      }
-      return value;
+      return typeof value === "function" ? value.bind(target) : value;
     }
   });
 }
 
+export function snapshotPlayerRequestContext(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  targetWindow: Window = window
+): OriginalPlayerRequestContext {
+  const rawUrl = extractUrlFromFetchInput(input);
+  let url = rawUrl;
+
+  try {
+    url = new URL(rawUrl, targetWindow.location?.href || "https://www.youtube.com").href;
+  } catch {
+    // Keep original string if URL normalization fails.
+  }
+
+  const headers = new Headers(
+    typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined
+  );
+
+  if (init?.headers) {
+    const overlay = new Headers(init.headers);
+    overlay.forEach((value, key) => headers.set(key, value));
+  }
+
+  const request = typeof Request !== "undefined" && input instanceof Request ? input : undefined;
+
+  return {
+    url,
+    headers,
+    credentials: init?.credentials ?? request?.credentials ?? "same-origin",
+    referrer: (init?.referrer ?? request?.referrer) || targetWindow.location?.href,
+    referrerPolicy: init?.referrerPolicy ?? request?.referrerPolicy
+  };
+}
+
 /**
- * Intercepts a window.fetch call for player responses.
- * Fails open: if anything fails, returns the original response unmodified.
+ * Handle a completed YouTube player response.
+ *
+ * Critical behavior:
+ * - A verified clean alternate response may replace ad-bound streamingData.
+ * - If no clean alternate is available, DO NOT strip ad metadata from the
+ *   ad-bound response. Stripping it while retaining the original stream session
+ *   is what triggers YouTube's preroll-length backoff.
+ * - In that failure case we return the original response so the DOM fallback can
+ *   immediately finish the real ad state (mute/seek/skip) instead of waiting.
  */
 export async function handleFetchResponse(
   originalResponse: Response,
   urlStr: string,
   onEvent?: EventCallback,
   requestPayload?: any,
-  alternateManager: AlternatePlayerManager = globalAlternatePlayer
+  alternateManager: AlternatePlayerManager = globalAlternatePlayer,
+  requestContext?: OriginalPlayerRequestContext
 ): Promise<Response> {
-  if (!isPlayerEndpoint(urlStr)) {
-    return originalResponse;
-  }
+  if (!isPlayerEndpoint(urlStr)) return originalResponse;
 
   onEvent?.({ type: "PLAYER_RESPONSE_SEEN" });
 
-  // Only inspect successful responses
-  if (!originalResponse.ok) {
-    return originalResponse;
-  }
+  if (!originalResponse.ok) return originalResponse;
 
   try {
-    // Clone so the original stream is preserved if not modified
-    const cloned = originalResponse.clone();
-    const data = await cloned.json();
-
+    const data = await originalResponse.clone().json();
     const videoId = data?.videoDetails?.videoId || extractVideoId(urlStr, undefined, data);
+
     if (videoId) {
       globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RECEIVED", videoId);
     }
 
-    // Step 2: Stop throwing away original ad information too early.
-    // Privately inspect the response and calculate PrerollInfo before sanitization.
     const prerollInfo = detectPrerollInfo(data);
-    if (videoId) {
-      globalPlaybackTiming.setPrerollInfo(prerollInfo, videoId);
-    }
+    if (videoId) globalPlaybackTiming.setPrerollInfo(prerollInfo, videoId);
 
-    // Performance rule: if hasPreroll is false, add ZERO latency overhead!
-    if (!prerollInfo.hasPreroll) {
-      const { sanitized, report } = sanitizePlayerResponse(data);
+    const { report } = sanitizePlayerResponse(data);
+
+    // Truly clean response: no rewrite and no latency.
+    if (!report.changed) {
       if (videoId) {
         globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
       }
-
-      if (!report.changed) {
-        return originalResponse;
-      }
-
-      onEvent?.({
-        type: "PLAYER_RESPONSE_SANITIZED",
-        removed: report.removed
-      });
-
-      return createSanitizedResponse(originalResponse, sanitized);
+      return originalResponse;
     }
 
-    // Step 3: Player response substitution when preroll is detected
-    const payload = requestPayload || extractPayloadFromInitOrData(undefined, undefined, data);
-    let substituted = false;
+    // For prerolls, attempt a clean stream substitution using the exact original
+    // request URL / API key / browser session headers. Direct unit callers may
+    // omit requestContext; production interception always supplies the real one.
+    const effectiveRequestContext: OriginalPlayerRequestContext = requestContext ?? {
+      url: new URL(urlStr, "https://www.youtube.com").href
+    };
 
-    if (payload && videoId) {
+    if (prerollInfo.hasPreroll && requestPayload && videoId) {
       const alternateResult = await alternateManager.fetchCleanAlternateResponse(
-        payload,
+        requestPayload,
         videoId,
-        800 // 800ms bounded race time budget
+        effectiveRequestContext,
+        1200
       );
 
       if (alternateResult) {
         const cleanMerged = mergeCleanPlaybackData(data, alternateResult.response);
 
-        if (videoId) {
-          globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
-        }
+        globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
 
         onEvent?.({
           type: "PLAYER_RESPONSE_SUBSTITUTED",
@@ -247,33 +241,22 @@ export async function handleFetchResponse(
 
         onEvent?.({
           type: "PLAYER_RESPONSE_SANITIZED",
-          removed: ["adPlacements", "playerAds", "adSlots", "adBreakHeartbeatParams"]
+          removed: report.removed
         });
 
-        substituted = true;
         return createSanitizedResponse(originalResponse, cleanMerged);
       }
     }
 
-    // Step 14: Fallback to existing response sanitizer if substitution is unavailable or timed out
-    if (!substituted) {
-      const { sanitized, report } = sanitizePlayerResponse(data);
-      if (videoId) {
-        globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
-      }
-
-      if (report.changed) {
-        onEvent?.({
-          type: "PLAYER_RESPONSE_SANITIZED",
-          removed: report.removed
-        });
-        return createSanitizedResponse(originalResponse, sanitized);
-      }
+    // IMPORTANT: do not sanitize the original ad-bound session on failure.
+    // Let YouTube initialize the ad stream and let the player fallback terminate
+    // it immediately. This avoids the full-duration blocked-preroll backoff.
+    if (videoId) {
+      globalPlaybackTiming.recordMilestone("PLAYER_RESPONSE_RETURNED_TO_YOUTUBE", videoId);
     }
 
     return originalResponse;
   } catch (err) {
-    // Fail-open: notify health monitor of error and return original untouched response
     onEvent?.({
       type: "ERROR",
       subsystem: "SANITIZER",
@@ -283,9 +266,6 @@ export async function handleFetchResponse(
   }
 }
 
-/**
- * Patches window.fetch defensively and idempotently.
- */
 export function installFetchInterceptor(
   targetWindow: Window = window,
   onEvent?: EventCallback,
@@ -294,47 +274,46 @@ export function installFetchInterceptor(
   const installKey = Symbol.for("ytclean.fetch.installed");
   const win = targetWindow as unknown as Record<symbol, boolean>;
 
-  if (win[installKey]) {
-    // Already installed, idempotent no-op
-    return () => {};
-  }
+  if (win[installKey]) return () => {};
 
   const originalFetch = targetWindow.fetch;
   const boundFetch = originalFetch.bind(targetWindow);
-
-  // Wire unpatched nativeFetch into the alternate player manager
   alternateManager.setNativeFetch(boundFetch);
 
   const patchedFetch: typeof targetWindow.fetch = async function (
     input: RequestInfo | URL,
     init?: RequestInit
   ): Promise<Response> {
-    // Section 18: Protection against recursion. Tagged internal calls bypass interceptor.
     if (isInternalFetch(input, init)) {
       return boundFetch(input, init);
     }
 
     const urlStr = extractUrlFromFetchInput(input);
 
-    // Monitor media requests (videoplayback / googlevideo)
     if (isMediaEndpoint(urlStr)) {
       globalPlaybackTiming.monitorMediaRequest(urlStr, true);
       const response = await boundFetch(input, init);
       globalPlaybackTiming.monitorMediaRequest(urlStr, false);
 
-      // Section 9: 403 / 401 / 410 detection on substituted media
       if (response.status === 401 || response.status === 403 || response.status === 410) {
         const activePreferred = alternateManager.getClientPool().getPreferredClient();
         if (activePreferred) {
-          alternateManager.getClientPool().markFailure(activePreferred, "MEDIA_403");
+          alternateManager.getClientPool().markFailure(
+            activePreferred,
+            `MEDIA_${response.status}`
+          );
         }
       }
 
       return response;
     }
 
-    // Timing milestone: Player request started
-    if (isPlayerEndpoint(urlStr)) {
+    const playerRequest = isPlayerEndpoint(urlStr);
+    const requestContext = playerRequest
+      ? snapshotPlayerRequestContext(input, init, targetWindow)
+      : undefined;
+
+    if (playerRequest) {
       const videoId = extractVideoId(urlStr, init);
       if (videoId) {
         globalPlaybackTiming.startSession(videoId);
@@ -342,17 +321,22 @@ export function installFetchInterceptor(
       }
     }
 
-    // Run original fetch with all original arguments intact
     const response = await boundFetch(input, init);
 
     const payload = extractPayloadFromInitOrData(init, input);
-    return handleFetchResponse(response, urlStr, onEvent, payload, alternateManager);
+    return handleFetchResponse(
+      response,
+      urlStr,
+      onEvent,
+      payload,
+      alternateManager,
+      requestContext
+    );
   };
 
   targetWindow.fetch = patchedFetch;
   win[installKey] = true;
 
-  // Teardown function
   return () => {
     targetWindow.fetch = originalFetch;
     delete win[installKey];

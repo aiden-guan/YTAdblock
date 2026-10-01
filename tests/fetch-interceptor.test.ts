@@ -60,7 +60,7 @@ describe("fetch-interceptor", () => {
     teardown();
   });
 
-  it("sanitizes player endpoint response when ads are present", async () => {
+  it("preserves an ad-bound player response when no verified alternate is available", async () => {
     const adData = JSON.parse(JSON.stringify(adFixture));
     const originalResponse = new Response(JSON.stringify(adData), {
       status: 200,
@@ -82,16 +82,12 @@ describe("fetch-interceptor", () => {
     expect(res.headers.get("x-custom-header")).toBe("TestValue");
 
     const json = await res.json();
-    expect(json.adPlacements).toBeUndefined();
-    expect(json.playerAds).toBeUndefined();
+    expect(json.adPlacements).toBeDefined();
+    expect(json.playerAds).toBeDefined();
     expect(json.videoDetails).toBeDefined();
 
     expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" },
-      {
-        type: "PLAYER_RESPONSE_SANITIZED",
-        removed: expect.arrayContaining(["adPlacements", "playerAds", "adSlots"])
-      }
+      { type: "PLAYER_RESPONSE_SEEN" }
     ]);
 
     teardown();

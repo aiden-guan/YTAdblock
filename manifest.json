@@ -1,12 +1,11 @@
 {
   "manifest_version": 3,
   "name": "YouTube Clean",
-  "version": "1.1.0",
-  "description": "High-fidelity, transparent YouTube ad prevention and playback preservation",
+  "version": "1.2.0",
+  "description": "Seamless YouTube ad suppression with playback-preserving fallback",
   "minimum_chrome_version": "111",
   "permissions": [
-    "storage",
-    "declarativeNetRequest"
+    "storage"
   ],
   "host_permissions": [
     "https://www.youtube.com/*",
@@ -39,15 +38,6 @@
       "run_at": "document_start"
     }
   ],
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ruleset_youtube",
-        "enabled": true,
-        "path": "rules/youtube.json"
-      }
-    ]
-  },
   "action": {
     "default_popup": "popup/index.html",
     "default_title": "YouTube Clean"

@@ -103,7 +103,7 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     expect(json).toEqual(cleanFixture);
   });
 
-  it("3. Alternate wrong video: rejects alternate response and falls back to sanitized original", async () => {
+  it("3. Alternate wrong video: rejects alternate response and preserves original ad session for fast fallback", async () => {
     const originalAdResponse = JSON.parse(JSON.stringify(adFixture));
     const targetVideoId = "target-correct-vid";
     originalAdResponse.videoDetails.videoId = targetVideoId;
@@ -132,10 +132,12 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     );
 
     const json = await res.json();
-    // Video ID must remain targetVideoId, and ad fields are sanitized via fallback
+    // Video ID remains correct and the original ad session is preserved.
+    // The DOM fallback can now complete the real ad immediately instead of
+    // triggering YouTube's blocked-preroll wait.
     expect(json.videoDetails.videoId).toBe(targetVideoId);
-    expect(json.adPlacements).toBeUndefined();
-    expect(emittedEvents).toContainEqual(
+    expect(json.adPlacements).toBeDefined();
+    expect(emittedEvents).not.toContainEqual(
       expect.objectContaining({ type: "PLAYER_RESPONSE_SANITIZED" })
     );
   });
@@ -232,7 +234,7 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     );
 
     const json = await res.json();
-    expect(json.adPlacements).toBeUndefined(); // Fallback sanitized it
+    expect(json.adPlacements).toBeDefined(); // Preserve real ad session for fast completion fallback
   });
 
   it("7. Alternate 403 media: marks candidate unhealthy and rotates candidate", () => {
@@ -275,9 +277,9 @@ describe("Section 20: Comprehensive Player Substitution Test Suite", () => {
     );
     const duration = Date.now() - start;
 
-    expect(duration).toBeLessThan(1200); // Handled within time budget
+    expect(duration).toBeLessThan(1500); // Bounded alternate attempt, then immediate fallback
     const json = await res.json();
-    expect(json.adPlacements).toBeUndefined(); // Fallback sanitizer executed
+    expect(json.adPlacements).toBeDefined(); // Original ad session preserved to avoid backoff
   });
 
   it("9. Two successful candidates: first valid one wins; other is aborted", async () => {

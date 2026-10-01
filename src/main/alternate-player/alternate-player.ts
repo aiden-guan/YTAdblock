@@ -1,19 +1,3 @@
-/**
- * Alternate Player Response Coordinator.
- *
- * Executes a bounded, parallelized race among healthy Innertube client profiles
- * to obtain a clean, compatible player response when the standard WEB response
- * is ad-bound.
- *
- * Key guarantees:
- * - Uses unpatched nativeFetch to eliminate recursion risk.
- * - Tags all internal calls with "X-YTClean-Internal".
- * - Bounded race (max 2-3 concurrent candidates).
- * - Enforces strict time budget (~800ms) with immediate AbortController cancellation.
- * - First valid, clean response wins; losing candidates aborted.
- * - SPA navigation cancels in-flight races.
- */
-
 import { PlayerClientPool, type PlayerClientProfile } from "./client-pool";
 import { validateAlternatePlayerResponse } from "./response-validator";
 import { globalPlaybackTiming } from "../playback-timing";
@@ -23,11 +7,18 @@ export interface AlternateSubstitutionResult {
   candidateId: string;
 }
 
+export interface OriginalPlayerRequestContext {
+  url: string;
+  headers?: HeadersInit;
+  credentials?: RequestCredentials;
+  referrer?: string;
+  referrerPolicy?: ReferrerPolicy;
+}
+
 export class AlternatePlayerManager {
   private clientPool: PlayerClientPool;
   private nativeFetch: typeof window.fetch;
   private activeControllers: Set<AbortController> = new Set();
-  private readonly internalHeader = "X-YTClean-Internal";
 
   constructor(
     clientPool: PlayerClientPool = new PlayerClientPool(),
@@ -47,40 +38,25 @@ export class AlternatePlayerManager {
     return this.clientPool;
   }
 
-  /**
-   * Sets or updates the native fetch reference (captured before interceptor is installed).
-   */
   public setNativeFetch(fn: typeof window.fetch): void {
     this.nativeFetch = fn;
   }
 
-  public isInternalRequest(requestOrHeaders: unknown): boolean {
-    if (!requestOrHeaders) return false;
-    if (typeof requestOrHeaders === "object" && "headers" in (requestOrHeaders as any)) {
-      const headers = (requestOrHeaders as any).headers;
-      if (headers && typeof headers.get === "function") {
-        return headers.get(this.internalHeader) === "1";
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Aborts all pending candidate requests (e.g. upon SPA navigation).
-   */
   public abortAllPending(): void {
     for (const controller of this.activeControllers) {
       try {
         controller.abort();
       } catch {
-        // Ignore abort error
+        // Ignore abort failure
       }
     }
     this.activeControllers.clear();
   }
 
   /**
-   * Clones and customizes the original YouTube player request for a candidate profile.
+   * Build a candidate context from the real request while removing stale WEB-only
+   * client identity. Keep locale/visitor/session fields that belong to the browser
+   * session, but change the actual Innertube client identity atomically.
    */
   public buildCandidatePayload(
     originalPayload: Record<string, unknown>,
@@ -89,100 +65,168 @@ export class AlternatePlayerManager {
   ): Record<string, unknown> {
     const payload: Record<string, unknown> = JSON.parse(JSON.stringify(originalPayload));
 
-    // Ensure context and client objects exist
-    if (!payload.context || typeof payload.context !== "object") {
-      payload.context = {};
-    }
-    const context = payload.context as Record<string, unknown>;
-    if (!context.client || typeof context.client !== "object") {
-      context.client = {};
-    }
-    const client = context.client as Record<string, unknown>;
+    const context =
+      payload.context && typeof payload.context === "object" && !Array.isArray(payload.context)
+        ? (payload.context as Record<string, unknown>)
+        : {};
 
-    // Inject candidate profile identity
-    client.clientName = candidate.clientName;
-    client.clientVersion = candidate.clientVersion;
+    const originalClient =
+      context.client && typeof context.client === "object" && !Array.isArray(context.client)
+        ? (context.client as Record<string, unknown>)
+        : {};
 
-    if (candidate.clientScreen) {
-      client.clientScreen = candidate.clientScreen;
+    const nextClient: Record<string, unknown> = {
+      clientName: candidate.clientName,
+      clientVersion: candidate.clientVersion
+    };
+
+    // Preserve browser-session fields that are independent of client family.
+    for (const key of [
+      "hl",
+      "gl",
+      "visitorData",
+      "utcOffsetMinutes",
+      "timeZone",
+      "userInterfaceTheme"
+    ]) {
+      if (originalClient[key] !== undefined) {
+        nextClient[key] = originalClient[key];
+      }
     }
-    if (candidate.osName) {
-      client.osName = candidate.osName;
-    }
-    if (candidate.osVersion) {
-      client.osVersion = candidate.osVersion;
-    }
+
+    if (candidate.clientScreen) nextClient.clientScreen = candidate.clientScreen;
+    if (candidate.osName) nextClient.osName = candidate.osName;
+    if (candidate.osVersion) nextClient.osVersion = candidate.osVersion;
     if (candidate.androidSdkVersion) {
-      client.androidSdkVersion = candidate.androidSdkVersion;
+      nextClient.androidSdkVersion = candidate.androidSdkVersion;
     }
-    if (candidate.deviceModel) {
-      client.deviceModel = candidate.deviceModel;
+    if (candidate.deviceModel) nextClient.deviceModel = candidate.deviceModel;
+
+    context.client = nextClient;
+
+    if (candidate.requiresEmbedContext) {
+      const existingThirdParty =
+        context.thirdParty &&
+        typeof context.thirdParty === "object" &&
+        !Array.isArray(context.thirdParty)
+          ? (context.thirdParty as Record<string, unknown>)
+          : {};
+
+      context.thirdParty = {
+        ...existingThirdParty,
+        embedUrl: `https://www.youtube.com/embed/${videoId}?html5=1`
+      };
+    } else if (context.thirdParty && candidate.clientName !== "WEB_EMBEDDED_PLAYER") {
+      // A WEB embed context can invalidate non-embed candidates.
+      delete context.thirdParty;
     }
 
-    if (candidate.requiresOriginalUrl) {
-      client.originalUrl = `https://www.youtube.com/embed/${videoId}`;
-    }
-
-    // Preserve critical playback flags
+    payload.context = context;
     payload.videoId = videoId;
-    payload.contentCheckOk = true;
-    payload.racyCheckOk = true;
+
+    if (candidate.useAdPlaybackContext) {
+      const playbackContext =
+        payload.playbackContext &&
+        typeof payload.playbackContext === "object" &&
+        !Array.isArray(payload.playbackContext)
+          ? (payload.playbackContext as Record<string, unknown>)
+          : {};
+
+      const existingAdPlaybackContext =
+        playbackContext.adPlaybackContext &&
+        typeof playbackContext.adPlaybackContext === "object" &&
+        !Array.isArray(playbackContext.adPlaybackContext)
+          ? (playbackContext.adPlaybackContext as Record<string, unknown>)
+          : {};
+
+      playbackContext.adPlaybackContext = {
+        ...existingAdPlaybackContext,
+        pyv: true
+      };
+
+      payload.playbackContext = playbackContext;
+    }
+
+    // Preserve original values when present; otherwise use permissive playback flags.
+    if (payload.contentCheckOk === undefined) payload.contentCheckOk = true;
+    if (payload.racyCheckOk === undefined) payload.racyCheckOk = true;
 
     return payload;
   }
 
-  /**
-   * Executes candidate race to find a valid clean player response.
-   */
+  private buildCandidateHeaders(
+    originalHeaders: HeadersInit | undefined,
+    candidate: PlayerClientProfile
+  ): Headers {
+    const headers = new Headers(originalHeaders || undefined);
+
+    headers.set("content-type", "application/json");
+    headers.set(
+      "x-youtube-client-name",
+      String(candidate.innertubeContextClientName)
+    );
+    headers.set("x-youtube-client-version", candidate.clientVersion);
+
+    // Never forward body-length values after mutating the body.
+    headers.delete("content-length");
+
+    return headers;
+  }
+
   public async fetchCleanAlternateResponse(
     originalPayload: unknown,
     expectedVideoId: string,
-    timeBudgetMs = 800
+    requestContextOrBudget?: OriginalPlayerRequestContext | number,
+    timeBudgetMs = 1200
   ): Promise<AlternateSubstitutionResult | null> {
     if (!originalPayload || typeof originalPayload !== "object" || !expectedVideoId) {
       return null;
     }
 
-    const candidates = this.clientPool.getCandidates().slice(0, 3);
-    if (candidates.length === 0) {
-      return null;
+    // Backward-compatible test/default path. Production always supplies the real
+    // request context so the API key, headers and browser session are preserved.
+    let requestContext: OriginalPlayerRequestContext;
+    if (typeof requestContextOrBudget === "number") {
+      timeBudgetMs = requestContextOrBudget;
+      requestContext = { url: "/youtubei/v1/player?prettyPrint=false" };
+    } else {
+      requestContext =
+        requestContextOrBudget ?? { url: "/youtubei/v1/player?prettyPrint=false" };
     }
+
+    const candidates = this.clientPool.getCandidates().slice(0, 2);
+    if (candidates.length === 0) return null;
 
     const raceController = new AbortController();
     this.activeControllers.add(raceController);
 
-    const raceStartTime = Date.now();
-    const candidateControllers: AbortController[] = [];
-
-    // Timeout guard: if time budget elapses before a winner emerges, cancel race
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+
     const timeoutPromise = new Promise<null>((resolve) => {
+      const finish = () => {
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+        resolve(null);
+      };
+
       timeoutTimer = setTimeout(() => {
         raceController.abort();
-        resolve(null);
+        finish();
       }, timeBudgetMs);
 
-      raceController.signal.addEventListener(
-        "abort",
-        () => {
-          if (timeoutTimer) clearTimeout(timeoutTimer);
-          resolve(null);
-        },
-        { once: true }
-      );
+      raceController.signal.addEventListener("abort", finish, { once: true });
     });
 
     const executeCandidate = async (
       candidate: PlayerClientProfile
     ): Promise<AlternateSubstitutionResult> => {
       const candidateController = new AbortController();
-      candidateControllers.push(candidateController);
-
-      // Link raceController abort to candidateController
       const onRaceAbort = () => candidateController.abort();
       raceController.signal.addEventListener("abort", onRaceAbort, { once: true });
 
-      const candidateStartTime = Date.now();
+      const started = Date.now();
       this.clientPool.markAttempt(candidate.id);
 
       try {
@@ -192,18 +236,24 @@ export class AlternatePlayerManager {
           expectedVideoId
         );
 
-        const response = await this.nativeFetch("/youtubei/v1/player?prettyPrint=false", {
+        const headers = this.buildCandidateHeaders(requestContext.headers, candidate);
+
+        const referrer = candidate.requiresEmbedContext
+          ? `https://www.youtube.com/embed/${expectedVideoId}?html5=1`
+          : requestContext.referrer;
+
+        const response = await this.nativeFetch(requestContext.url, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            [this.internalHeader]: "1"
-          },
+          headers,
           body: JSON.stringify(payload),
-          signal: candidateController.signal
+          signal: candidateController.signal,
+          credentials: requestContext.credentials ?? "same-origin",
+          referrer,
+          referrerPolicy: requestContext.referrerPolicy
         });
 
         if (!response.ok) {
-          const duration = Date.now() - candidateStartTime;
+          const duration = Date.now() - started;
           this.clientPool.markFailure(candidate.id, `HTTP_${response.status}`);
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
@@ -216,10 +266,9 @@ export class AlternatePlayerManager {
         }
 
         const data = await response.json();
-        const duration = Date.now() - candidateStartTime;
+        const duration = Date.now() - started;
 
-        const isValid = validateAlternatePlayerResponse(data, expectedVideoId);
-        if (!isValid) {
+        if (!validateAlternatePlayerResponse(data, expectedVideoId)) {
           this.clientPool.markFailure(candidate.id, "INVALID_RESPONSE");
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
@@ -230,7 +279,6 @@ export class AlternatePlayerManager {
           throw new Error("Validation failed");
         }
 
-        // Candidate succeeded!
         this.clientPool.markSuccess(candidate.id, duration);
         globalPlaybackTiming.recordCandidateResult({
           candidateId: candidate.id,
@@ -244,7 +292,7 @@ export class AlternatePlayerManager {
           candidateId: candidate.id
         };
       } catch (err) {
-        const duration = Date.now() - candidateStartTime;
+        const duration = Date.now() - started;
         if (candidateController.signal.aborted) {
           globalPlaybackTiming.recordCandidateResult({
             candidateId: candidate.id,
@@ -260,26 +308,21 @@ export class AlternatePlayerManager {
     };
 
     try {
-      // Promise.any takes the first resolved valid result
       const winner = await Promise.race([
-        Promise.any(candidates.map((c) => executeCandidate(c))),
+        Promise.any(candidates.map((candidate) => executeCandidate(candidate))),
         timeoutPromise
       ]);
 
-      if (winner) {
-        // Abort remaining candidates immediately
-        raceController.abort();
-        globalPlaybackTiming.setSelectedCandidate(winner.candidateId, expectedVideoId);
-        return winner;
-      }
-      return null;
+      if (!winner) return null;
+
+      raceController.abort();
+      globalPlaybackTiming.setSelectedCandidate(winner.candidateId, expectedVideoId);
+      return winner;
     } catch {
-      // All candidates failed
       return null;
     } finally {
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-      }
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      raceController.abort();
       this.activeControllers.delete(raceController);
     }
   }
