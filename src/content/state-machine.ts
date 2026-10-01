@@ -4,13 +4,11 @@ import { PlayerController } from "./player-controller";
 
 export type StateChangeEvent = (from: PlayerState, to: PlayerState) => void;
 
-/**
- * Robust finite state machine governing playback protection and ad transitions.
- */
 export class PlaybackStateMachine {
   private state: PlayerState = "CONTENT";
   private controller: PlayerController;
   private shortLivedTimer: ReturnType<typeof setInterval> | null = null;
+  private postClickVerifyTimer: ReturnType<typeof setTimeout> | null = null;
   private observer: MutationObserver | null = null;
 
   constructor(
@@ -29,12 +27,8 @@ export class PlaybackStateMachine {
     return this.controller;
   }
 
-  /**
-   * Evaluates current DOM signals and transitions states accordingly.
-   */
   public update(): void {
     const detection = detectAdSignals(this.playerElement);
-    const prevState = this.state;
 
     switch (this.state) {
       case "CONTENT":
@@ -63,28 +57,16 @@ export class PlaybackStateMachine {
       }
 
       case "CONFIRMED_AD": {
-        // Still in ad?
         if (detection.isConfirmedAd || detection.hasAdShowingClass) {
-          // Keep ad muted and fast so no audio leaks
-          this.controller.applyAccelerationAndMute();
-          // Re-attempt skip button if it appeared, or seek near end
-          if (!this.controller.tryClickSkipButton(detection)) {
-            this.controller.trySeekToEndOfAd(detection);
-          }
+          this.attemptAdCompletion(detection);
         } else {
-          // Ad terminated, begin recovery
-          this.stopShortLivedTimer();
-          this.transitionTo("RECOVERING");
-          this.controller.restoreUserState();
-          this.transitionTo("CONTENT");
+          this.finishRecovery();
         }
         break;
       }
 
       case "RECOVERING": {
-        this.stopShortLivedTimer();
-        this.controller.restoreUserState();
-        this.transitionTo("CONTENT");
+        this.finishRecovery();
         break;
       }
     }
@@ -103,34 +85,77 @@ export class PlaybackStateMachine {
       signals: detection.signals.map((s) => s.detail)
     });
 
-    // 1. Snapshot user configuration before taking actions
     this.controller.snapshotUserState();
+    this.attemptAdCompletion(detection);
+    this.startShortLivedTimer();
+  }
 
-    // 2. Mute ad immediately and accelerate to prevent audio leakage
+  /**
+   * A synthetic button click is only an attempt, not a success signal.
+   *
+   * We click if a native control exists, then re-check the player shortly after.
+   * If YouTube ignored the synthetic click and the ad is still active, fall back
+   * to muting/accelerating/seeking the confirmed ad media.
+   */
+  private attemptAdCompletion(detection: AdDetectionResult): void {
+    this.controller.snapshotUserState();
     this.controller.applyAccelerationAndMute();
 
-    // 3. Progressive strategy: click skip button -> near-end seek
-    const skipped = this.controller.tryClickSkipButton(detection);
-    if (!skipped) {
+    const clickAttempted = this.controller.tryClickSkipButton(detection);
+
+    if (!clickAttempted) {
       this.controller.trySeekToEndOfAd(detection);
+      return;
     }
 
-    // Start a short-lived timer to track ad completion without full-page polling
-    this.startShortLivedTimer();
+    this.schedulePostClickVerification();
+  }
+
+  private schedulePostClickVerification(): void {
+    if (this.postClickVerifyTimer !== null) return;
+
+    this.postClickVerifyTimer = setTimeout(() => {
+      this.postClickVerifyTimer = null;
+
+      if (this.state !== "CONFIRMED_AD") return;
+
+      const freshDetection = detectAdSignals(this.playerElement);
+      if (freshDetection.isConfirmedAd || freshDetection.hasAdShowingClass) {
+        this.controller.applyAccelerationAndMute();
+        this.controller.trySeekToEndOfAd(freshDetection);
+      }
+    }, 80);
+  }
+
+  private finishRecovery(): void {
+    this.stopShortLivedTimer();
+    this.clearPostClickVerification();
+    this.transitionTo("RECOVERING");
+    this.controller.restoreUserState();
+    this.transitionTo("CONTENT");
   }
 
   private startShortLivedTimer(): void {
     if (this.shortLivedTimer !== null) return;
+
     let iterations = 0;
-    const maxIterations = 50; // Max 5 seconds of active monitoring
+    const maxIterations = 100; // up to 10 seconds of ad-only monitoring
 
     this.shortLivedTimer = setInterval(() => {
       iterations++;
       this.update();
+
       if (this.state !== "CONFIRMED_AD" || iterations >= maxIterations) {
         this.stopShortLivedTimer();
       }
     }, 100);
+  }
+
+  private clearPostClickVerification(): void {
+    if (this.postClickVerifyTimer !== null) {
+      clearTimeout(this.postClickVerifyTimer);
+      this.postClickVerifyTimer = null;
+    }
   }
 
   private stopShortLivedTimer(): void {
@@ -140,9 +165,6 @@ export class PlaybackStateMachine {
     }
   }
 
-  /**
-   * Binds MutationObserver targeted at this specific player element.
-   */
   public attachObserver(): void {
     this.detachObserver();
 
@@ -152,12 +174,11 @@ export class PlaybackStateMachine {
 
     this.observer.observe(this.playerElement, {
       attributes: true,
-      attributeFilter: ["class"],
+      attributeFilter: ["class", "style", "hidden", "aria-disabled"],
       childList: true,
       subtree: true
     });
 
-    // Initial check
     this.update();
   }
 
@@ -167,24 +188,27 @@ export class PlaybackStateMachine {
       this.observer = null;
     }
     this.stopShortLivedTimer();
+    this.clearPostClickVerification();
   }
 
-  /**
-   * Resets transient state during SPA navigation.
-   */
   public resetForNavigation(): void {
     this.stopShortLivedTimer();
+    this.clearPostClickVerification();
+
     if (this.state === "CONFIRMED_AD" || this.state === "RECOVERING") {
       this.controller.restoreUserState();
     }
+
     this.state = "CONTENT";
   }
 
   public destroy(): void {
     this.detachObserver();
+
     if (this.state === "CONFIRMED_AD" || this.state === "RECOVERING") {
       this.controller.restoreUserState();
     }
+
     this.state = "CONTENT";
   }
 }
