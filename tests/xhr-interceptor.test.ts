@@ -68,7 +68,7 @@ describe("xhr-interceptor", () => {
     teardown();
   });
 
-  it("sanitizes player response when onreadystatechange was assigned before send", () => {
+  it("preserves player response for fast-completion fallback", () => {
     const teardown = installXhrInterceptor(fakeWindow, (ev) => emittedEvents.push(ev));
 
     const xhr = new fakeWindow.XMLHttpRequest();
@@ -91,16 +91,12 @@ describe("xhr-interceptor", () => {
 
     expect(receivedText).not.toBe("");
     const parsed = JSON.parse(receivedText);
-    expect(parsed.adPlacements).toBeUndefined();
-    expect(parsed.playerAds).toBeUndefined();
+    expect(parsed.adPlacements).toBeDefined();
+    expect(parsed.playerAds).toBeDefined();
     expect(parsed.videoDetails).toBeDefined();
 
     expect(emittedEvents).toEqual([
-      { type: "PLAYER_RESPONSE_SEEN" },
-      {
-        type: "PLAYER_RESPONSE_SANITIZED",
-        removed: expect.arrayContaining(["adPlacements", "playerAds"])
-      }
+      { type: "PLAYER_RESPONSE_SEEN" }
     ]);
 
     teardown();
@@ -113,6 +109,7 @@ describe("xhr-interceptor", () => {
     xhr.open("POST", "/youtubei/v1/player");
     xhr.responseType = "json";
     xhr._rawResponseText = JSON.stringify(adFixture);
+    xhr._rawResponse = JSON.parse(JSON.stringify(adFixture));
     xhr.readyState = 4;
     xhr.status = 200;
     xhr.send();
@@ -120,13 +117,13 @@ describe("xhr-interceptor", () => {
     const result = xhr.response;
     expect(result).toBeDefined();
     expect(typeof result).toBe("object");
-    expect(result.adPlacements).toBeUndefined();
+    expect(result.adPlacements).toBeDefined();
     expect(result.streamingData).toBeDefined();
 
     teardown();
   });
 
-  it("fails open and emits ERROR event on malformed JSON in XHR", () => {
+  it("leaves malformed JSON untouched without interfering with XHR", () => {
     const teardown = installXhrInterceptor(fakeWindow, (ev) => emittedEvents.push(ev));
 
     const xhr = new fakeWindow.XMLHttpRequest();
@@ -137,12 +134,7 @@ describe("xhr-interceptor", () => {
     xhr.send();
 
     expect(xhr.responseText).toBe("{ this is invalid json");
-    expect(emittedEvents).toContainEqual(
-      expect.objectContaining({
-        type: "ERROR",
-        subsystem: "XHR_SANITIZER"
-      })
-    );
+    expect(emittedEvents).toEqual([{ type: "PLAYER_RESPONSE_SEEN" }]);
 
     teardown();
   });
