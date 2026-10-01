@@ -6,7 +6,8 @@ export interface AdSignal {
     | "SKIP_BUTTON_VISIBLE"
     | "AD_CONTAINER_VISIBLE"
     | "AD_TEXT_PRESENT"
-    | "AD_MODULE_CHILDREN";
+    | "AD_MODULE_CHILDREN"
+    | "ADVERTISER_UI_VISIBLE";
   weight: number;
   detail: string;
 }
@@ -23,6 +24,7 @@ export interface AdDetectionResult {
 export function isElementVisible(el: HTMLElement | null): boolean {
   if (!el) return false;
   if (el.hidden) return false;
+
   const style = window.getComputedStyle ? window.getComputedStyle(el) : null;
   if (style) {
     if (
@@ -33,6 +35,7 @@ export function isElementVisible(el: HTMLElement | null): boolean {
       return false;
     }
   }
+
   return (
     el.offsetWidth > 0 ||
     el.offsetHeight > 0 ||
@@ -64,7 +67,7 @@ export function detectAdSignals(
   if (hasAdShowingClass) {
     signals.push({
       name: "AD_SHOWING_CLASS",
-      weight: 3,
+      weight: 4,
       detail: "Player is in YouTube's explicit ad-showing/ad-interrupting state"
     });
   }
@@ -75,8 +78,8 @@ export function detectAdSignals(
       skipButton = btn;
       signals.push({
         name: "SKIP_BUTTON_VISIBLE",
-        weight: 2,
-        detail: `Visible skip button detected with selector: ${selector}`
+        weight: 3,
+        detail: `Visible skip control detected with selector: ${selector}`
       });
       break;
     }
@@ -87,11 +90,23 @@ export function detectAdSignals(
     if (container && isElementVisible(container)) {
       signals.push({
         name: "AD_CONTAINER_VISIBLE",
-        weight: 1,
+        weight: 2,
         detail: `Visible ad container: ${selector}`
       });
       break;
     }
+  }
+
+  const advertiserUi = playerElement.querySelector<HTMLElement>(
+    ".ytp-visit-advertiser-link, .ytp-visit-advertiser-link__text, .ytp-ad-player-overlay-flyout-cta"
+  );
+
+  if (advertiserUi && isElementVisible(advertiserUi)) {
+    signals.push({
+      name: "ADVERTISER_UI_VISIBLE",
+      weight: 3,
+      detail: "Visible advertiser CTA / visit-advertiser UI detected"
+    });
   }
 
   const adText = playerElement.querySelector<HTMLElement>(
@@ -121,12 +136,20 @@ export function detectAdSignals(
 
   const score = signals.reduce((sum, signal) => sum + signal.weight, 0);
 
-  // YouTube itself adding ad-showing/ad-interrupting is a strong, explicit signal.
-  // Waiting for a second DOM signal creates a visible delay and is unnecessary.
+  /**
+   * Strong confirmation paths:
+   * - explicit player ad class
+   * - current skip control + any independent ad UI
+   * - advertiser CTA + another ad UI signal
+   *
+   * This covers the modern end-card shown in the user's screenshot without
+   * treating a generic button or ordinary video overlay as an ad by itself.
+   */
   const isConfirmedAd =
     hasAdShowingClass ||
-    (skipButton !== null && score >= 3) ||
-    score >= 4;
+    (skipButton !== null && score >= 5) ||
+    (signals.some((s) => s.name === "ADVERTISER_UI_VISIBLE") && score >= 5) ||
+    score >= 7;
 
   const isPossibleAd = !isConfirmedAd && signals.length > 0;
 
